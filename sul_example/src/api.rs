@@ -39,6 +39,10 @@ impl ApiController {
         }
     }
 
+    pub async fn put_users_id_(self, request: PutUsersIdRequest) -> PutUsersIdResponse {
+        PutUsersIdResponse::ok(&format!("okay {} replaced", request.id))
+    }
+
     pub async fn get_profiles(self, _: GetProfilesRequest) -> GetProfilesResponse {
         GetProfilesResponse::ok(&vec![GetProfilesOk {
             id: "1".to_owned(),

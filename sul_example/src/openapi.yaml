@@ -20,6 +20,16 @@ paths:
             application/json:
               schema:
                 type: string
+    put:
+      summary: Replaces a user by id.
+      description: Some text
+      responses:
+        '200':
+          description: Some text
+          content:
+            application/json:
+              schema:
+                type: string
   /users:
     get:
       summary: Returns all users.

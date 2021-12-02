@@ -1,11 +1,12 @@
 #![feature(proc_macro_span)]
 
 use openapi::{OperationObject, ResponseObject, SchemaObject};
+use path::Route;
 use proc_macro::{Span, TokenStream};
 use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
-use quote::quote;
+use quote::{format_ident, quote};
 use std::ops::Deref;
-use syn::{parse_macro_input, AttributeArgs, Ident, ItemStruct, Lit, NestedMeta, TypePath};
+use syn::{parse_macro_input, AttributeArgs, ItemStruct, Lit, NestedMeta, TypePath};
 
 mod openapi;
 mod path;
@@ -16,7 +17,7 @@ mod path;
 
 #[proc_macro_attribute]
 pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let oa_spec = {
+    let document = {
         let args = parse_macro_input!(attr as AttributeArgs);
         let yaml_filename = if let Some(NestedMeta::Lit(Lit::Str(s))) = args.iter().next() {
             s.value()
@@ -34,26 +35,90 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut routes = Vec::new();
 
     let mut method_sources: Vec<TokenStream2> = Vec::new();
-    for (oa_path, oa_path_spec) in &oa_spec.paths {
-        if let Some(oa_method_spec) = &oa_path_spec.get {
-            let (response_type_id, source) = expand_response_source(oa_path, "get", oa_method_spec);
-            method_sources.push(source);
+    for (path, path_item) in document.paths {
+        if let Some(operation) = &path_item.get {
+            construct_routes(
+                hyper::Method::GET,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
 
-            let path_sc = sc(oa_path);
-            let controller_fn = format!("get_{}", path_sc);
-            let controller_fn_id = syn::Ident::new(controller_fn.as_str(), Span2::call_site());
+        if let Some(operation) = &path_item.put {
+            construct_routes(
+                hyper::Method::PUT,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
 
-            routes.push(path::Route {
-                method: hyper::Method::GET,
-                controller_fn_id,
-                path: oa_path.as_str(),
-                response_type_id,
-            });
+        if let Some(operation) = &path_item.post {
+            construct_routes(
+                hyper::Method::POST,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
+
+        if let Some(operation) = &path_item.delete {
+            construct_routes(
+                hyper::Method::DELETE,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
+
+        if let Some(operation) = &path_item.options {
+            construct_routes(
+                hyper::Method::OPTIONS,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
+
+        if let Some(operation) = &path_item.head {
+            construct_routes(
+                hyper::Method::HEAD,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
+
+        if let Some(operation) = &path_item.patch {
+            construct_routes(
+                hyper::Method::PATCH,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
+        }
+
+        if let Some(operation) = &path_item.trace {
+            construct_routes(
+                hyper::Method::TRACE,
+                path.clone(),
+                operation,
+                &mut method_sources,
+                &mut routes,
+            );
         }
     }
 
-    let path_id = syn::Ident::new("path", Span2::call_site());
-    let method_id = syn::Ident::new("method", Span2::call_site());
+    let path_id = id("path");
+    let method_id = id("method");
     let (route_matcher_source, request_types_source) =
         path::expand_route_matcher(&routes, path_id, method_id);
 
@@ -74,12 +139,39 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
+fn construct_routes(
+    method: hyper::Method,
+    path: String,
+    operation: &OperationObject,
+    method_sources: &mut Vec<TokenStream2>,
+    routes: &mut Vec<Route>,
+) {
+    let method_lc = method.as_str().to_lowercase();
+    let result = expand_response_source(&path, &method_lc, operation);
+    method_sources.push(result.struct_source);
+
+    let path_sc = sc(&path);
+    let operation_name_id = format_ident!("{}_{}", method_lc, path_sc);
+
+    routes.push(path::Route {
+        method,
+        operation_name_id,
+        path,
+        response_type_id: result.struct_id,
+    });
+}
+
+struct ResponseSourceResult {
+    struct_id: syn::Ident,
+    struct_source: TokenStream2,
+}
+
 /// Expands at the http method, e.g. `paths./users.get` for the name "GetUsers"
 fn expand_response_source(
     path: impl AsRef<str>,
     method_lc: impl AsRef<str>,
     oa_method_spec: &OperationObject,
-) -> (syn::Ident, TokenStream2) {
+) -> ResponseSourceResult {
     let method_ucc = ucc(method_lc.as_ref());
     let path_ucc = ucc(path.as_ref());
     let name_ucc = method_ucc + &path_ucc;
@@ -88,7 +180,7 @@ fn expand_response_source(
     let mut response_struct_impl_sources: Vec<TokenStream2> = Vec::new();
 
     let response_struct_name = name_ucc.clone() + "Response";
-    let response_struct_id = Ident::new(response_struct_name.as_str(), Span2::call_site());
+    let struct_id = id(&response_struct_name);
 
     for (oa_status_code, oa_response_spec) in &oa_method_spec.responses {
         let status_name_lc = get_status_name_lc(oa_status_code);
@@ -101,17 +193,17 @@ fn expand_response_source(
             &mut data_struct_sources,
         );
 
-        let status_code_name_id = Ident::new(status_name_lc, Span2::call_site());
+        let status_code_name_id = id(status_name_lc);
 
         let fn_doc_source = expand_method_doc(&path, &method_lc, oa_status_code, oa_response_spec);
 
         response_struct_impl_sources.push(quote! {
             #fn_doc_source
-            pub fn #status_code_name_id(data: &#data_type) -> #response_struct_id {
+            pub fn #status_code_name_id(data: &#data_type) -> #struct_id {
                 let content = serde_json::to_string(data).unwrap();
                 let body = hyper::Body::from(content);
 
-                #response_struct_id {
+                #struct_id {
                     response: hyper::Response::builder()
                         .body(body)
                         .unwrap()
@@ -122,28 +214,31 @@ fn expand_response_source(
 
     let response_struct_doc_source = expand_response_doc(path, method_lc, &oa_method_spec);
 
-    let response_source = quote! {
+    let struct_source = quote! {
         #(#data_struct_sources) *
 
         #response_struct_doc_source
-        pub struct #response_struct_id {
+        pub struct #struct_id {
             #[doc(hidden)]
             response: hyper::Response<hyper::Body>,
         }
 
         #[doc(hidden)]
-        impl Into<hyper::Response<hyper::Body>> for #response_struct_id {
+        impl Into<hyper::Response<hyper::Body>> for #struct_id {
             fn into(self) -> hyper::Response<hyper::Body> {
                 self.response
             }
         }
 
-        impl #response_struct_id {
+        impl #struct_id {
             #(#response_struct_impl_sources) *
         }
     };
 
-    (response_struct_id, response_source)
+    ResponseSourceResult {
+        struct_id,
+        struct_source,
+    }
 }
 
 /// Expand schema source, returning the result type.
@@ -170,7 +265,7 @@ fn expand_schema_source(
 
                 let underlying_prop_type =
                     expand_schema_source(&name, oa_schema, data_struct_sources);
-                let prop_id = syn::Ident::new(&sc(&oa_prop_name_cc), Span2::call_site());
+                let prop_id = id(&sc(&oa_prop_name_cc));
 
                 struct_props_sources.push(quote! {
                     #[serde(rename = #oa_prop_name_cc)]
@@ -178,7 +273,7 @@ fn expand_schema_source(
                 });
             }
 
-            let data_struct_id = syn::Ident::new(name.as_ref(), Span2::call_site());
+            let data_struct_id = id(&name);
 
             let data_struct_source = quote! {
                 #[derive(serde::Serialize, Debug)]
@@ -330,6 +425,10 @@ fn expand_service_mod_source(
 }
 
 // basic helper
+
+fn id(id: impl AsRef<str>) -> syn::Ident {
+    syn::Ident::new(id.as_ref(), Span2::call_site())
+}
 
 /// snake-case
 fn sc(expr: impl AsRef<str>) -> String {

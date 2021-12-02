@@ -43,6 +43,13 @@ pub struct ServerObject {
 #[derive(Deserialize, Debug)]
 pub struct PathItemObject {
     pub get: Option<OperationObject>,
+    pub put: Option<OperationObject>,
+    pub post: Option<OperationObject>,
+    pub delete: Option<OperationObject>,
+    pub options: Option<OperationObject>,
+    pub head: Option<OperationObject>,
+    pub patch: Option<OperationObject>,
+    pub trace: Option<OperationObject>,
 }
 
 #[derive(Deserialize, Debug)]
