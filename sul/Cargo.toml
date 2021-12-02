@@ -1,0 +1,19 @@
+[package]
+name = "sul"
+version = "0.0.0"
+edition = "2018"
+description = "OpenAPI Rust Tower Service generator"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+syn = { version = "1.0", features = ["derive", "full"] }
+quote = "1.0"
+hyper = { version = "0.14" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.8"
