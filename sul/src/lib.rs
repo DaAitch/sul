@@ -1,10 +1,12 @@
 #![feature(proc_macro_span)]
 
+use hyper::Method;
+use naming::get_operation_id;
 use openapi::{OperationObject, ResponseObject, SchemaObject};
 use path::Route;
 use proc_macro::{Span, TokenStream};
 use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use quote::quote;
 use std::ops::Deref;
 use syn::{parse_macro_input, AttributeArgs, ItemStruct, Lit, NestedMeta, TypePath};
 
@@ -18,6 +20,12 @@ mod path;
 
 const APISERVICE_CALL_PATH_ID: &str = "path";
 const APISERVICE_CALL_METHOD_ID: &str = "method";
+
+#[derive(Default)]
+struct OpenAPIExpansionContext {
+    user_mod_sources: Vec<TokenStream2>,
+    service_mod_sources: Vec<TokenStream2>,
+}
 
 #[proc_macro_attribute]
 pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -36,130 +44,70 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
         openapi::read_openapi(yaml_file_path).unwrap()
     };
 
+    let mut ctx = OpenAPIExpansionContext::default();
     let mut routes = Vec::new();
 
-    let mut method_sources: Vec<TokenStream2> = Vec::new();
-    for (path, path_item) in document.paths {
-        if let Some(operation) = &path_item.get {
-            construct_routes(
-                hyper::Method::GET,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
+    for (path, item) in document.paths {
+        for (method, operation) in [
+            (Method::GET, &item.get),
+            (Method::PUT, &item.put),
+            (Method::POST, &item.post),
+            (Method::DELETE, &item.delete),
+            (Method::OPTIONS, &item.options),
+            (Method::HEAD, &item.head),
+            (Method::PATCH, &item.patch),
+            (Method::TRACE, &item.trace),
+        ] {
+            if let Some(operation) = operation {
+                let route = expand_route(&mut ctx, method, path.clone(), operation);
 
-        if let Some(operation) = &path_item.put {
-            construct_routes(
-                hyper::Method::PUT,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
-
-        if let Some(operation) = &path_item.post {
-            construct_routes(
-                hyper::Method::POST,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
-
-        if let Some(operation) = &path_item.delete {
-            construct_routes(
-                hyper::Method::DELETE,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
-
-        if let Some(operation) = &path_item.options {
-            construct_routes(
-                hyper::Method::OPTIONS,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
-
-        if let Some(operation) = &path_item.head {
-            construct_routes(
-                hyper::Method::HEAD,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
-
-        if let Some(operation) = &path_item.patch {
-            construct_routes(
-                hyper::Method::PATCH,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
-        }
-
-        if let Some(operation) = &path_item.trace {
-            construct_routes(
-                hyper::Method::TRACE,
-                path.clone(),
-                operation,
-                &mut method_sources,
-                &mut routes,
-            );
+                routes.push(route);
+            }
         }
     }
 
-    let (route_matcher_source, request_types_source) = path::expand_route_matcher(&routes);
+    let route_matcher_source = path::expand_route_matcher(&mut ctx, &routes);
 
     let controller_struct = parse_macro_input!(item as ItemStruct);
+    ctx.user_mod_sources.push(quote! { #controller_struct });
+
     let controller_id = &controller_struct.ident;
+    expand_service(&mut ctx, controller_id, route_matcher_source);
 
-    let api_service_source = expand_service_mod_source(controller_id, route_matcher_source);
+    {
+        let user_mod_sources = &ctx.user_mod_sources;
+        let service_mod_sources = &ctx.service_mod_sources;
 
-    quote! {
-        #(#method_sources) *
+        quote! {
+            #(#user_mod_sources) *
 
-        #request_types_source
-
-        #api_service_source
-
-        #controller_struct
+            #[doc = "tower-service implementations"]
+            mod service {
+                #(#service_mod_sources) *
+            }
+        }
+        .into()
     }
-    .into()
 }
 
-fn construct_routes(
+fn expand_route(
+    ctx: &mut OpenAPIExpansionContext,
     method: hyper::Method,
     path: String,
     operation: &OperationObject,
-    method_sources: &mut Vec<TokenStream2>,
-    routes: &mut Vec<Route>,
-) {
+) -> Route {
     let method_lc = method.as_str().to_lowercase();
     let result = expand_response_source(&path, &method_lc, operation);
-    method_sources.push(result.struct_source);
+    ctx.user_mod_sources.push(result.struct_source);
 
-    let path_sc = snake_case(&path);
-    let operation_name_id = format_ident!("{}_{}", method_lc, path_sc);
+    let operation_id = get_operation_id(operation, &method, &path);
 
-    routes.push(path::Route {
+    path::Route {
         method,
-        operation_id: operation_name_id,
+        operation_id,
         path,
         response_type_id: result.struct_id,
-    });
+    }
 }
 
 struct ResponseSourceResult {
@@ -342,87 +290,86 @@ fn expand_method_doc(
     ))
 }
 
-fn expand_service_mod_source(
+fn expand_service(
+    ctx: &mut OpenAPIExpansionContext,
     controller_id: &syn::Ident,
     route_matcher_source: TokenStream2,
-) -> TokenStream2 {
-    quote! {
-        #[doc = "tower-service implementations"]
-        mod service {
-            use hyper::{Request, Body, service::Service, Method, Response};
-            use futures::{future::BoxFuture, Future, FutureExt};
-            use std::{
-                convert::Infallible,
-                task::{Context, Poll},
-                result::Result,
-                pin::Pin,
-            };
+) {
+    ctx.service_mod_sources.push(quote! {
 
-            pub struct ApiService<F, N> {
-                #[doc(hidden)]
-                make_controller: F,
-                #[doc(hidden)]
-                not_found: N,
-            }
+        use hyper::{Request, Body, service::Service, Method, Response};
+        use futures::{future::BoxFuture, Future, FutureExt};
+        use std::{
+            convert::Infallible,
+            task::{Context, Poll},
+            result::Result,
+            pin::Pin,
+        };
 
-            impl<F, N> ApiService<F, N> {
-                pub fn new<R>(make_controller: F, not_found: N) -> ApiService<F, N>
-                where
-                    F: Fn() -> super::#controller_id,
-                    N: Fn(Request<Body>) -> R,
-                    R: Future<Output = Response<Body>> + 'static + Send,
-                {
-                    ApiService {
-                        make_controller,
-                        not_found,
-                    }
-                }
-            }
+        pub struct ApiService<F, N> {
+            #[doc(hidden)]
+            make_controller: F,
+            #[doc(hidden)]
+            not_found: N,
+        }
 
-            impl<F, N, R> Service<Request<Body>> for ApiService<F, N>
+        impl<F, N> ApiService<F, N> {
+            pub fn new<R>(make_controller: F, not_found: N) -> ApiService<F, N>
             where
                 F: Fn() -> super::#controller_id,
                 N: Fn(Request<Body>) -> R,
                 R: Future<Output = Response<Body>> + 'static + Send,
             {
-                type Response = Response<Body>;
-                type Error = Infallible;
-                type Future = ControllerFuture;
-
-                fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-                    Poll::Ready(Ok(()))
-                }
-
-                fn call(&mut self, request: Request<Body>) -> Self::Future {
-                    let method = request.method();
-                    let path = request.uri().path();
-
-                    let action = {
-                        #route_matcher_source
-                    };
-
-                    ControllerFuture { action }
-                }
-            }
-
-            #[doc(hidden)]
-            pub struct ControllerFuture {
-                action: BoxFuture<'static, Response<Body>>,
-            }
-
-            #[doc(hidden)]
-            impl futures::Future for ControllerFuture {
-                type Output = Result<Response<Body>, Infallible>;
-
-                fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                    match self.action.as_mut().poll(cx) {
-                        Poll::Pending => Poll::Pending,
-                        Poll::Ready(result) => Poll::Ready(Ok(result)),
-                    }
+                ApiService {
+                    make_controller,
+                    not_found,
                 }
             }
         }
-    }
+
+        impl<F, N, R> Service<Request<Body>> for ApiService<F, N>
+        where
+            F: Fn() -> super::#controller_id,
+            N: Fn(Request<Body>) -> R,
+            R: Future<Output = Response<Body>> + 'static + Send,
+        {
+            type Response = Response<Body>;
+            type Error = Infallible;
+            type Future = ControllerFuture;
+
+            fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, request: Request<Body>) -> Self::Future {
+                let method = request.method();
+                let path = request.uri().path();
+
+                let action = {
+                    #route_matcher_source
+                };
+
+                ControllerFuture { action }
+            }
+        }
+
+        #[doc(hidden)]
+        pub struct ControllerFuture {
+            action: BoxFuture<'static, Response<Body>>,
+        }
+
+        #[doc(hidden)]
+        impl futures::Future for ControllerFuture {
+            type Output = Result<Response<Body>, Infallible>;
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                match self.action.as_mut().poll(cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(result) => Poll::Ready(Ok(result)),
+                }
+            }
+        }
+    });
 }
 
 // basic helper

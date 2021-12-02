@@ -21,6 +21,7 @@ paths:
               schema:
                 type: string
     put:
+      operationId: replaceUser
       summary: Replaces a user by id.
       description: Some text
       responses:

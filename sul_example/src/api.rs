@@ -39,7 +39,7 @@ impl ApiController {
         }
     }
 
-    pub async fn put_users_id_(self, request: PutUsersIdRequest) -> PutUsersIdResponse {
+    pub async fn replace_user(self, request: PutUsersIdRequest) -> PutUsersIdResponse {
         PutUsersIdResponse::ok(&format!("okay {} replaced", request.id))
     }
 

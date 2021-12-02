@@ -54,6 +54,8 @@ pub struct PathItemObject {
 
 #[derive(Deserialize, Debug)]
 pub struct OperationObject {
+    #[serde(rename = "operationId")]
+    pub operation_id: Option<String>,
     pub summary: Option<String>,
     pub description: Option<String>,
     pub responses: HashMap<String, ResponseObject>, // response or ref-object
