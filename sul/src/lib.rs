@@ -8,12 +8,16 @@ use quote::{format_ident, quote};
 use std::ops::Deref;
 use syn::{parse_macro_input, AttributeArgs, ItemStruct, Lit, NestedMeta, TypePath};
 
+mod naming;
 mod openapi;
 mod path;
 
 // return quote_spanned! {
 //     yaml_filename.span() => compile_error!("error here");
 // }.into();
+
+const APISERVICE_CALL_PATH_ID: &str = "path";
+const APISERVICE_CALL_METHOD_ID: &str = "method";
 
 #[proc_macro_attribute]
 pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -117,10 +121,7 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    let path_id = id("path");
-    let method_id = id("method");
-    let (route_matcher_source, request_types_source) =
-        path::expand_route_matcher(&routes, path_id, method_id);
+    let (route_matcher_source, request_types_source) = path::expand_route_matcher(&routes);
 
     let controller_struct = parse_macro_input!(item as ItemStruct);
     let controller_id = &controller_struct.ident;
@@ -150,12 +151,12 @@ fn construct_routes(
     let result = expand_response_source(&path, &method_lc, operation);
     method_sources.push(result.struct_source);
 
-    let path_sc = sc(&path);
+    let path_sc = snake_case(&path);
     let operation_name_id = format_ident!("{}_{}", method_lc, path_sc);
 
     routes.push(path::Route {
         method,
-        operation_name_id,
+        operation_id: operation_name_id,
         path,
         response_type_id: result.struct_id,
     });
@@ -172,8 +173,8 @@ fn expand_response_source(
     method_lc: impl AsRef<str>,
     oa_method_spec: &OperationObject,
 ) -> ResponseSourceResult {
-    let method_ucc = ucc(method_lc.as_ref());
-    let path_ucc = ucc(path.as_ref());
+    let method_ucc = upper_camel_case(method_lc.as_ref());
+    let path_ucc = upper_camel_case(path.as_ref());
     let name_ucc = method_ucc + &path_ucc;
 
     let mut data_struct_sources: Vec<TokenStream2> = Vec::new();
@@ -184,7 +185,7 @@ fn expand_response_source(
 
     for (oa_status_code, oa_response_spec) in &oa_method_spec.responses {
         let status_name_lc = get_status_name_lc(oa_status_code);
-        let status_name_ucc = ucc(status_name_lc);
+        let status_name_ucc = upper_camel_case(status_name_lc);
 
         let method_path_status_name = name_ucc.clone().to_owned() + &status_name_ucc;
         let data_type = expand_schema_source(
@@ -260,12 +261,12 @@ fn expand_schema_source(
         SchemaObject::Object(oa_object_props_schema) => {
             let mut struct_props_sources: Vec<TokenStream2> = Vec::new();
             for (oa_prop_name_cc, oa_schema) in oa_object_props_schema.deref() {
-                let oa_prop_name_ucc = ucc(oa_prop_name_cc);
+                let oa_prop_name_ucc = upper_camel_case(oa_prop_name_cc);
                 let name = name.as_ref().to_owned() + &oa_prop_name_ucc;
 
                 let underlying_prop_type =
                     expand_schema_source(&name, oa_schema, data_struct_sources);
-                let prop_id = id(&sc(&oa_prop_name_cc));
+                let prop_id = id(&snake_case(&oa_prop_name_cc));
 
                 struct_props_sources.push(quote! {
                     #[serde(rename = #oa_prop_name_cc)]
@@ -313,7 +314,7 @@ fn expand_response_doc(
 ) -> TokenStream2 {
     let path = path.as_ref();
     let method_lc = method_lc.as_ref();
-    let method_auc = auc(method_lc);
+    let method_auc = all_upper_case(method_lc);
 
     let doc = match &spec.description {
         Some(desc) => format!("`{} {}`\n\n{}", method_auc, path, desc),
@@ -333,7 +334,7 @@ fn expand_method_doc(
     let method_lc = method_lc.as_ref();
     let status_code = status_code.as_ref();
 
-    let method_auc = auc(method_lc);
+    let method_auc = all_upper_case(method_lc);
 
     expand_doc(format!(
         "`{} {} -> {}`\n\n{}",
@@ -431,7 +432,7 @@ fn id(id: impl AsRef<str>) -> syn::Ident {
 }
 
 /// snake-case
-fn sc(expr: impl AsRef<str>) -> String {
+fn snake_case(expr: impl AsRef<str>) -> String {
     let expr = expr.as_ref();
     let mut s = String::with_capacity(2 * expr.len());
 
@@ -461,7 +462,7 @@ fn sc(expr: impl AsRef<str>) -> String {
 }
 
 /// upper camel-case
-fn ucc(expr: impl AsRef<str>) -> String {
+fn upper_camel_case(expr: impl AsRef<str>) -> String {
     let expr = expr.as_ref();
     let mut s = String::with_capacity(2 * expr.len());
 
@@ -491,7 +492,7 @@ fn ucc(expr: impl AsRef<str>) -> String {
 }
 
 /// all upper case
-fn auc(expr: impl AsRef<str>) -> String {
+fn all_upper_case(expr: impl AsRef<str>) -> String {
     expr.as_ref()
         .chars()
         .map(|ch| ch.to_ascii_uppercase())
@@ -502,13 +503,13 @@ fn auc(expr: impl AsRef<str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{sc, ucc};
+    use crate::{snake_case, upper_camel_case};
 
     #[test]
     fn some_tests() {
-        assert_eq!(sc("errorCode"), "error_code".to_owned());
-        assert_eq!(sc("/users"), "users".to_owned());
-        assert_eq!(sc("/some/thing"), "some_thing".to_owned());
-        assert_eq!(ucc("/users"), "Users".to_owned());
+        assert_eq!(snake_case("errorCode"), "error_code".to_owned());
+        assert_eq!(snake_case("/users"), "users".to_owned());
+        assert_eq!(snake_case("/some/thing"), "some_thing".to_owned());
+        assert_eq!(upper_camel_case("/users"), "Users".to_owned());
     }
 }
