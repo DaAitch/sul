@@ -187,24 +187,36 @@ pub fn check_path_parameters<'a>(
     parameters: impl IntoIterator<Item = &'a String>,
     operation: &OperationObject,
     method: &Method,
-    path: impl AsRef<str>
+    path: impl AsRef<str>,
 ) -> std::result::Result<(), String> {
     let empty_parameter = Vec::new();
 
     for parameter in parameters {
-        match operation.parameters.as_ref().unwrap_or(&empty_parameter).into_iter().find(|p| {
-            &p.name == parameter && p.r#in == ParameterLocation::Path
-        }) {
+        match operation
+            .parameters
+            .as_ref()
+            .unwrap_or(&empty_parameter)
+            .into_iter()
+            .find(|p| &p.name == parameter && p.r#in == ParameterLocation::Path)
+        {
             Some(param) => {
                 if param.required != Some(true) {
-                    Err(format!("path parameter '{}' in '{} {}' is missing field 'required = true'", parameter, method, path.as_ref()))
+                    Err(format!(
+                        "path parameter '{}' in '{} {}' is missing field 'required = true'",
+                        parameter,
+                        method,
+                        path.as_ref()
+                    ))
                 } else {
                     Ok(())
                 }
-            },
-            None => {
-                Err(format!("missing path parameter '{}' in '{} {}'", parameter, method, path.as_ref()))
             }
+            None => Err(format!(
+                "missing path parameter '{}' in '{} {}'",
+                parameter,
+                method,
+                path.as_ref()
+            )),
         }?;
     }
 

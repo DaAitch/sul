@@ -12,9 +12,9 @@ Given an OpenAPI spec:
 openapi: 3.0.0
 # omitted
 paths:
-  /users:
+  /users/{id}:
     get:
-      summary: Returns all users.
+      summary: Returns a user by id.
       description: Some text
       responses:
         '200':
@@ -22,20 +22,11 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: 
-                  type: string
-        '401':
-          description: Some text
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  errorCode:
-                    type: string
-                  errorMessage:
-                    type: string                  
+                type: string
+      parameters:
+        - name: id
+          in: path
+          required: true
 ```
 
 I want to implement an HTTP server according to a contract without writing boilerplate code 
@@ -51,8 +42,8 @@ impl ApiController {
         ApiController { context }
     }
 
-    pub async fn get_users(self, _: GetUsersRequest) -> GetUsersResponse {
-        todo!()
+    pub async fn get_users_id_(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
+        GetUsersIdResponse::ok(&format!("parameter is {}", request.id))
     }
 }
 ```
