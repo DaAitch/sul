@@ -1,5 +1,6 @@
 //! <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md>
 
+use hyper::Method;
 use serde::{
     de::{MapAccess, Visitor},
     Deserialize, Deserializer,
@@ -166,11 +167,11 @@ pub struct ParameterObject {
     pub name: String,
     pub r#in: ParameterLocation,
     pub description: Option<String>,
-    pub required: bool,
-    pub deprecated: bool,
+    pub required: Option<bool>,
+    pub deprecated: Option<bool>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq)]
 pub enum ParameterLocation {
     #[serde(rename = "query")]
     Query,
@@ -180,4 +181,32 @@ pub enum ParameterLocation {
     Path,
     #[serde(rename = "cookie")]
     Cookie,
+}
+
+pub fn check_path_parameters<'a>(
+    parameters: impl IntoIterator<Item = &'a String>,
+    operation: &OperationObject,
+    method: &Method,
+    path: impl AsRef<str>
+) -> std::result::Result<(), String> {
+    let empty_parameter = Vec::new();
+
+    for parameter in parameters {
+        match operation.parameters.as_ref().unwrap_or(&empty_parameter).into_iter().find(|p| {
+            &p.name == parameter && p.r#in == ParameterLocation::Path
+        }) {
+            Some(param) => {
+                if param.required != Some(true) {
+                    Err(format!("path parameter '{}' in '{} {}' is missing field 'required = true'", parameter, method, path.as_ref()))
+                } else {
+                    Ok(())
+                }
+            },
+            None => {
+                Err(format!("missing path parameter '{}' in '{} {}'", parameter, method, path.as_ref()))
+            }
+        }?;
+    }
+
+    Ok(())
 }

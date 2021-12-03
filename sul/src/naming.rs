@@ -7,17 +7,17 @@ pub fn get_request_type_id(
     method: impl AsRef<str>,
     path: impl AsRef<str>,
 ) -> syn::Ident {
-    match &operation.operation_id {
-        Some(operation_id) => {
-            format_ident!("{}Request", upper_camel_case(operation_id))
-        }
+    let prefix = match &operation.operation_id {
+        Some(operation_id) => upper_camel_case(operation_id),
         None => {
             let method_ucc = upper_camel_case(method.as_ref().to_lowercase());
             let path_sc = upper_camel_case(path);
 
-            format_ident!("{}{}Request", method_ucc, path_sc)
+            format!("{}{}", method_ucc, path_sc)
         }
-    }
+    };
+
+    format_ident!("{}Request", prefix)
 }
 
 pub fn get_response_type_id(
@@ -25,17 +25,17 @@ pub fn get_response_type_id(
     method: impl AsRef<str>,
     path: impl AsRef<str>,
 ) -> syn::Ident {
-    match &operation.operation_id {
-        Some(operation_id) => {
-            format_ident!("{}Response", upper_camel_case(operation_id))
-        }
+    let prefix = match &operation.operation_id {
+        Some(operation_id) => upper_camel_case(operation_id),
         None => {
             let method_ucc = upper_camel_case(method.as_ref().to_lowercase());
             let path_sc = upper_camel_case(path);
 
-            format_ident!("{}{}Response", method_ucc, path_sc)
+            format!("{}{}", method_ucc, path_sc)
         }
-    }
+    };
+
+    format_ident!("{}Response", prefix)
 }
 
 pub fn get_response_builder_param_type_id(

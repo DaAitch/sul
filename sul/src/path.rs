@@ -6,7 +6,7 @@ use quote::quote;
 use crate::{
     id,
     naming::{get_operation_id, get_parameter_id, get_request_type_id, get_response_type_id},
-    openapi::OperationObject,
+    openapi::{OperationObject, check_path_parameters},
     OpenAPIExpansionContext, APISERVICE_CALL_METHOD_ID, APISERVICE_CALL_PATH_ID,
 };
 
@@ -18,7 +18,7 @@ const TEMPLATE_END: char = '}';
 /// - `let ctrl = (self.make_controller)();` creates a controller
 /// - `(self.not_found)()(request)` invokes the not_found handler
 ///
-/// Returns: (match block, request types)
+/// Returns: match block source
 pub(crate) fn expand_route_matcher<'a>(
     ctx: &mut OpenAPIExpansionContext,
     routes: impl IntoIterator<Item = &'a Route<'a>>,
@@ -67,7 +67,7 @@ fn expand_node_matcher(
     let mut keys: Vec<&PathNodeType> = node.children.keys().collect();
     keys.sort();
 
-    let mut s = Vec::with_capacity(keys.len());
+    let mut match_token_arm_sources = Vec::with_capacity(keys.len());
     for key in keys {
         let node = node.children.get(key).expect("iterating over keys");
 
@@ -83,7 +83,7 @@ fn expand_node_matcher(
                 parameters.push(parameter_name.clone());
                 let arm_source = expand_node_matcher(ctx, node, &parameters);
 
-                s.push(quote! {
+                match_token_arm_sources.push(quote! {
                     Some(#parameter_id) => {
                         #arm_source
                     }
@@ -91,7 +91,7 @@ fn expand_node_matcher(
             }
             &PathNodeType::Path(ref path) => {
                 let arm_source = expand_node_matcher(ctx, node, parameters);
-                s.push(quote! {
+                match_token_arm_sources.push(quote! {
                     Some(#path) => {
                         #arm_source
                     }
@@ -102,6 +102,9 @@ fn expand_node_matcher(
 
     let none_arm_source = match node.route {
         Some(route) => {
+            // validate that path parameters
+            check_path_parameters(parameters, route.operation, &route.method, &route.path).expect("Path parameters have to be valid");
+
             // construct request types
             let type_id = {
                 let type_id = route.get_request_type_id();
@@ -154,7 +157,7 @@ fn expand_node_matcher(
     quote! {
         match tokens.next() {
             #none_arm_source
-            #(#s) *
+            #(#match_token_arm_sources) *
 
             #[allow(unreachable_patterns)]
             _ => {
