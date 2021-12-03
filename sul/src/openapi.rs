@@ -1,4 +1,5 @@
-//! https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md
+//! <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md>
+
 use serde::{
     de::{MapAccess, Visitor},
     Deserialize, Deserializer,
@@ -59,6 +60,7 @@ pub struct OperationObject {
     pub summary: Option<String>,
     pub description: Option<String>,
     pub responses: HashMap<String, ResponseObject>, // response or ref-object
+    pub parameters: Option<Vec<ParameterObject>>,
 }
 
 /// https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#responseObject
@@ -157,4 +159,25 @@ impl<'de> Deserialize<'de> for SchemaObject {
 
         deserializer.deserialize_struct("SpecSchema", FIELDS, V)
     }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ParameterObject {
+    pub name: String,
+    pub r#in: ParameterLocation,
+    pub description: Option<String>,
+    pub required: bool,
+    pub deprecated: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub enum ParameterLocation {
+    #[serde(rename = "query")]
+    Query,
+    #[serde(rename = "header")]
+    Header,
+    #[serde(rename = "path")]
+    Path,
+    #[serde(rename = "cookie")]
+    Cookie,
 }

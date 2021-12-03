@@ -5,7 +5,8 @@ use quote::quote;
 
 use crate::{
     id,
-    naming::{get_parameter_id, get_request_type_id},
+    naming::{get_operation_id, get_parameter_id, get_request_type_id, get_response_type_id},
+    openapi::OperationObject,
     OpenAPIExpansionContext, APISERVICE_CALL_METHOD_ID, APISERVICE_CALL_PATH_ID,
 };
 
@@ -20,7 +21,7 @@ const TEMPLATE_END: char = '}';
 /// Returns: (match block, request types)
 pub(crate) fn expand_route_matcher<'a>(
     ctx: &mut OpenAPIExpansionContext,
-    routes: impl IntoIterator<Item = &'a Route>,
+    routes: impl IntoIterator<Item = &'a Route<'a>>,
 ) -> TokenStream2 {
     let mut method_map: HashMap<hyper::Method, PathNode> = Default::default();
 
@@ -100,10 +101,10 @@ fn expand_node_matcher(
     }
 
     let none_arm_source = match node.route {
-        Some(route_end) => {
+        Some(route) => {
             // construct request types
             let type_id = {
-                let type_id = get_request_type_id(&route_end.method, &route_end.path);
+                let type_id = route.get_request_type_id();
 
                 let fields = parameters.iter().map(get_parameter_id).map(|p| {
                     quote! {
@@ -127,13 +128,13 @@ fn expand_node_matcher(
                 }
             });
 
-            let operation_name_id = &route_end.operation_id;
-            let response_type_id = &route_end.response_type_id;
+            let operation_id = route.get_operation_id();
+            let response_type_id = route.get_response_type_id();
 
             Some(quote! {
                 None => {
                     let controller = (self.make_controller)();
-                    controller. #operation_name_id ( super:: #type_id {
+                    controller. #operation_id ( super:: #type_id {
                         #(#initializer), *
                     })
                         // Explicit parameter type is needed
@@ -183,16 +184,29 @@ fn insert_into<'a>(
     node.route = Some(route);
 }
 
-pub struct Route {
+pub struct Route<'a> {
     pub method: hyper::Method,
     pub path: String,
-    pub operation_id: syn::Ident,
-    pub response_type_id: syn::Ident,
+    pub operation: &'a OperationObject,
+}
+
+impl<'a> Route<'a> {
+    pub fn get_operation_id(&self) -> syn::Ident {
+        get_operation_id(self.operation, &self.method, &self.path)
+    }
+
+    pub fn get_request_type_id(&self) -> syn::Ident {
+        get_request_type_id(self.operation, &self.method, &self.path)
+    }
+
+    pub fn get_response_type_id(&self) -> syn::Ident {
+        get_response_type_id(self.operation, &self.method, &self.path)
+    }
 }
 
 struct PathNode<'a> {
     parameter_name: Option<String>,
-    route: Option<&'a Route>,
+    route: Option<&'a Route<'a>>,
     children: HashMap<PathNodeType, PathNode<'a>>,
 }
 

@@ -1,7 +1,7 @@
 #![feature(proc_macro_span)]
 
 use hyper::Method;
-use naming::get_operation_id;
+use naming::{get_prop_id, get_schema_prop_type_id};
 use openapi::{OperationObject, ResponseObject, SchemaObject};
 use path::Route;
 use proc_macro::{Span, TokenStream};
@@ -9,6 +9,8 @@ use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
 use quote::quote;
 use std::ops::Deref;
 use syn::{parse_macro_input, AttributeArgs, ItemStruct, Lit, NestedMeta, TypePath};
+
+use crate::naming::{get_response_builder_param_type_id, get_response_type_id};
 
 mod naming;
 mod openapi;
@@ -47,7 +49,7 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut ctx = OpenAPIExpansionContext::default();
     let mut routes = Vec::new();
 
-    for (path, item) in document.paths {
+    for (path, item) in &document.paths {
         for (method, operation) in [
             (Method::GET, &item.get),
             (Method::PUT, &item.put),
@@ -83,6 +85,15 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             #[doc = "tower-service implementations"]
             mod service {
+                use hyper::{Request, Body, service::Service, Method, Response};
+                use futures::{future::BoxFuture, Future, FutureExt};
+                use std::{
+                    convert::Infallible,
+                    task::{Context, Poll},
+                    result::Result,
+                    pin::Pin,
+                };
+
                 #(#service_mod_sources) *
             }
         }
@@ -90,63 +101,42 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_route(
+fn expand_route<'a>(
     ctx: &mut OpenAPIExpansionContext,
     method: hyper::Method,
     path: String,
-    operation: &OperationObject,
-) -> Route {
-    let method_lc = method.as_str().to_lowercase();
-    let result = expand_response_source(&path, &method_lc, operation);
-    ctx.user_mod_sources.push(result.struct_source);
-
-    let operation_id = get_operation_id(operation, &method, &path);
+    operation: &'a OperationObject,
+) -> Route<'a> {
+    expand_response_source(ctx, &method, &path, operation);
 
     path::Route {
         method,
-        operation_id,
+        operation,
         path,
-        response_type_id: result.struct_id,
     }
-}
-
-struct ResponseSourceResult {
-    struct_id: syn::Ident,
-    struct_source: TokenStream2,
 }
 
 /// Expands at the http method, e.g. `paths./users.get` for the name "GetUsers"
 fn expand_response_source(
+    ctx: &mut OpenAPIExpansionContext,
+    method: &Method,
     path: impl AsRef<str>,
-    method_lc: impl AsRef<str>,
-    oa_method_spec: &OperationObject,
-) -> ResponseSourceResult {
-    let method_ucc = upper_camel_case(method_lc.as_ref());
-    let path_ucc = upper_camel_case(path.as_ref());
-    let name_ucc = method_ucc + &path_ucc;
+    operation: &OperationObject,
+) {
+    let mut impl_sources: Vec<TokenStream2> = Vec::new();
 
-    let mut data_struct_sources: Vec<TokenStream2> = Vec::new();
-    let mut response_struct_impl_sources: Vec<TokenStream2> = Vec::new();
+    let struct_id = get_response_type_id(operation, method, &path);
 
-    let response_struct_name = name_ucc.clone() + "Response";
-    let struct_id = id(&response_struct_name);
+    for (status_code, response) in &operation.responses {
+        let type_id = get_response_builder_param_type_id(&operation, method, &path, status_code);
+        let data_type =
+            expand_schema_source(ctx, &type_id, &response.content.application_json.schema);
 
-    for (oa_status_code, oa_response_spec) in &oa_method_spec.responses {
-        let status_name_lc = get_status_name_lc(oa_status_code);
-        let status_name_ucc = upper_camel_case(status_name_lc);
+        let status_code_name_id = id(get_status_name_lc(status_code));
 
-        let method_path_status_name = name_ucc.clone().to_owned() + &status_name_ucc;
-        let data_type = expand_schema_source(
-            &method_path_status_name,
-            &oa_response_spec.content.application_json.schema,
-            &mut data_struct_sources,
-        );
+        let fn_doc_source = expand_method_doc(&method, &path, status_code, response);
 
-        let status_code_name_id = id(status_name_lc);
-
-        let fn_doc_source = expand_method_doc(&path, &method_lc, oa_status_code, oa_response_spec);
-
-        response_struct_impl_sources.push(quote! {
+        impl_sources.push(quote! {
             #fn_doc_source
             pub fn #status_code_name_id(data: &#data_type) -> #struct_id {
                 let content = serde_json::to_string(data).unwrap();
@@ -161,11 +151,9 @@ fn expand_response_source(
         })
     }
 
-    let response_struct_doc_source = expand_response_doc(path, method_lc, &oa_method_spec);
+    let response_struct_doc_source = expand_response_doc(&method, path, &operation);
 
-    let struct_source = quote! {
-        #(#data_struct_sources) *
-
+    ctx.user_mod_sources.push(quote! {
         #response_struct_doc_source
         pub struct #struct_id {
             #[doc(hidden)]
@@ -180,25 +168,20 @@ fn expand_response_source(
         }
 
         impl #struct_id {
-            #(#response_struct_impl_sources) *
+            #(#impl_sources) *
         }
-    };
-
-    ResponseSourceResult {
-        struct_id,
-        struct_source,
-    }
+    });
 }
 
 /// Expand schema source, returning the result type.
 fn expand_schema_source(
-    name: impl AsRef<str>,
-    oa_schema: &SchemaObject,
-    data_struct_sources: &mut Vec<TokenStream2>,
+    ctx: &mut OpenAPIExpansionContext,
+    parent_prop_name_id: &syn::Ident,
+    schema: &SchemaObject,
 ) -> TypePath {
-    match oa_schema {
-        SchemaObject::Array(oa_array_items_schema) => {
-            let sub_type = expand_schema_source(name, oa_array_items_schema, data_struct_sources);
+    match schema {
+        SchemaObject::Array(items_schema) => {
+            let sub_type = expand_schema_source(ctx, parent_prop_name_id, items_schema);
             let array_type_string = format!(
                 "std::vec::Vec<{}>",
                 sub_type.path.get_ident().unwrap().to_string() // TODO: Vec<Vec<String>> will fail?
@@ -206,32 +189,27 @@ fn expand_schema_source(
 
             syn::parse_str(array_type_string.as_str()).unwrap()
         }
-        SchemaObject::Object(oa_object_props_schema) => {
-            let mut struct_props_sources: Vec<TokenStream2> = Vec::new();
-            for (oa_prop_name_cc, oa_schema) in oa_object_props_schema.deref() {
-                let oa_prop_name_ucc = upper_camel_case(oa_prop_name_cc);
-                let name = name.as_ref().to_owned() + &oa_prop_name_ucc;
+        SchemaObject::Object(props_schema) => {
+            let mut struct_prop_sources = Vec::new();
+            for (prop_name, prop_schema) in props_schema.deref() {
+                let name = get_schema_prop_type_id(parent_prop_name_id, prop_name);
+                let prop_type = expand_schema_source(ctx, &name, prop_schema);
+                let prop_id = get_prop_id(prop_name);
 
-                let underlying_prop_type =
-                    expand_schema_source(&name, oa_schema, data_struct_sources);
-                let prop_id = id(&snake_case(&oa_prop_name_cc));
-
-                struct_props_sources.push(quote! {
-                    #[serde(rename = #oa_prop_name_cc)]
-                    #prop_id: #underlying_prop_type
+                struct_prop_sources.push(quote! {
+                    #[serde(rename = #prop_name)]
+                    #prop_id: #prop_type
                 });
             }
 
-            let data_struct_id = id(&name);
-
-            let data_struct_source = quote! {
+            ctx.user_mod_sources.push(quote! {
                 #[derive(serde::Serialize, Debug)]
-                pub struct #data_struct_id {
-                    #(#struct_props_sources), *
+                pub struct #parent_prop_name_id {
+                    #(#struct_prop_sources), *
                 }
-            };
-            data_struct_sources.push(data_struct_source);
-            syn::parse_str(name.as_ref()).unwrap()
+            });
+
+            syn::parse_str(parent_prop_name_id.to_string().as_str()).unwrap()
         }
         SchemaObject::String => syn::parse_str("String").unwrap(),
     }
@@ -256,37 +234,35 @@ fn expand_doc(text: impl AsRef<str>) -> TokenStream2 {
 }
 
 fn expand_response_doc(
+    method: &Method,
     path: impl AsRef<str>,
-    method_lc: impl AsRef<str>,
     spec: &OperationObject,
 ) -> TokenStream2 {
     let path = path.as_ref();
-    let method_lc = method_lc.as_ref();
-    let method_auc = all_upper_case(method_lc);
 
     let doc = match &spec.description {
-        Some(desc) => format!("`{} {}`\n\n{}", method_auc, path, desc),
-        None => format!("`{} {}`", method_auc, path),
+        Some(desc) => format!("`{} {}`\n\n{}", method.as_str(), path, desc),
+        None => format!("`{} {}`", method.as_str(), path),
     };
 
     expand_doc(doc)
 }
 
 fn expand_method_doc(
+    method: &Method,
     path: impl AsRef<str>,
-    method_lc: impl AsRef<str>,
     status_code: impl AsRef<str>,
     spec: &ResponseObject,
 ) -> TokenStream2 {
     let path = path.as_ref();
-    let method_lc = method_lc.as_ref();
     let status_code = status_code.as_ref();
-
-    let method_auc = all_upper_case(method_lc);
 
     expand_doc(format!(
         "`{} {} -> {}`\n\n{}",
-        method_auc, path, status_code, &spec.description
+        method.as_str(),
+        path,
+        status_code,
+        &spec.description
     ))
 }
 
@@ -296,16 +272,6 @@ fn expand_service(
     route_matcher_source: TokenStream2,
 ) {
     ctx.service_mod_sources.push(quote! {
-
-        use hyper::{Request, Body, service::Service, Method, Response};
-        use futures::{future::BoxFuture, Future, FutureExt};
-        use std::{
-            convert::Infallible,
-            task::{Context, Poll},
-            result::Result,
-            pin::Pin,
-        };
-
         pub struct ApiService<F, N> {
             #[doc(hidden)]
             make_controller: F,
@@ -436,14 +402,6 @@ fn upper_camel_case(expr: impl AsRef<str>) -> String {
     }
 
     s
-}
-
-/// all upper case
-fn all_upper_case(expr: impl AsRef<str>) -> String {
-    expr.as_ref()
-        .chars()
-        .map(|ch| ch.to_ascii_uppercase())
-        .collect()
 }
 
 // tests

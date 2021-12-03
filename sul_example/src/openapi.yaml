@@ -30,7 +30,12 @@ paths:
           content:
             application/json:
               schema:
-                type: string
+                type: object
+                properties:
+                  oldRevision:
+                    type: string
+                  newRevision:
+                    type: string
   /users:
     get:
       summary: Returns all users.

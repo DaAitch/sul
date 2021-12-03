@@ -39,8 +39,11 @@ impl ApiController {
         }
     }
 
-    pub async fn replace_user(self, request: PutUsersIdRequest) -> PutUsersIdResponse {
-        PutUsersIdResponse::ok(&format!("okay {} replaced", request.id))
+    pub async fn replace_user(self, _: ReplaceUserRequest) -> ReplaceUserResponse {
+        ReplaceUserResponse::ok(&ReplaceUserOk {
+            new_revision: "4321".to_owned(),
+            old_revision: "1234".to_owned(),
+        })
     }
 
     pub async fn get_profiles(self, _: GetProfilesRequest) -> GetProfilesResponse {
