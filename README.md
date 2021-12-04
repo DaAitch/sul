@@ -1,4 +1,8 @@
-# Sul - An WIP OpenAPI Rust Tower Service generator
+# sul
+
+*An WIP OpenAPI Rust Tower Service generator*
+
+<img src="sul-logo.svg" width="400"/> 
 
 Generating Rust code for a Contract-First OpenAPI approach.
 
