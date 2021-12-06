@@ -88,3 +88,7 @@ pub fn get_schema_prop_type_id(
 pub fn get_prop_id(prop_name: impl AsRef<str>) -> syn::Ident {
     id(snake_case(prop_name))
 }
+
+pub fn get_request_parameters_type_id(request_type_id: &syn::Ident) -> syn::Ident {
+    format_ident!("{}{}", request_type_id, "Parameters")
+}

@@ -21,7 +21,7 @@ impl ApiController {
     }
 
     pub async fn get_users_id_(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
-        GetUsersIdResponse::ok(&format!("parameter is {}", request.id))
+        GetUsersIdResponse::ok(&format!("parameter is {}", request.parameters.id))
     }
 
     pub async fn get_users(self, _: GetUsersRequest) -> GetUsersResponse {

@@ -62,6 +62,8 @@ pub struct OperationObject {
     pub description: Option<String>,
     pub responses: HashMap<String, ResponseObject>, // response or ref-object
     pub parameters: Option<Vec<ParameterObject>>,
+    #[serde(rename = "requestBody")]
+    pub request_body: Option<RequestBodyObject>,
 }
 
 /// https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#responseObject
@@ -221,4 +223,11 @@ pub fn check_path_parameters<'a>(
     }
 
     Ok(())
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RequestBodyObject {
+    pub description: Option<String>,
+    pub content: MediaTypeObjectMap,
+    pub required: Option<bool>,
 }

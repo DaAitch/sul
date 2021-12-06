@@ -5,7 +5,10 @@ use quote::quote;
 
 use crate::{
     id,
-    naming::{get_operation_id, get_parameter_id, get_request_type_id, get_response_type_id},
+    naming::{
+        get_operation_id, get_parameter_id, get_request_parameters_type_id, get_request_type_id,
+        get_response_type_id,
+    },
     openapi::{check_path_parameters, OperationObject},
     OpenAPIExpansionContext, APISERVICE_CALL_METHOD_ID, APISERVICE_CALL_PATH_ID,
 };
@@ -107,9 +110,10 @@ fn expand_node_matcher(
                 .expect("Path parameters have to be valid");
 
             // construct request types
-            let type_id = {
-                let type_id = route.get_request_type_id();
+            let type_id = route.get_request_type_id();
+            let parameters_type_id = route.get_request_parameters_type_id();
 
+            {
                 let fields = parameters.iter().map(get_parameter_id).map(|p| {
                     quote! {
                         pub #p: String
@@ -118,12 +122,14 @@ fn expand_node_matcher(
 
                 ctx.user_mod_sources.push(quote! {
                     pub struct #type_id {
+                        pub parameters: #parameters_type_id,
+                    }
+
+                    pub struct #parameters_type_id {
                         #(#fields), *
                     }
                 });
-
-                type_id
-            };
+            }
 
             let initializer = parameters.iter().map(|p| {
                 let p = syn::Ident::new(super::snake_case(p).as_str(), Span::call_site());
@@ -139,7 +145,9 @@ fn expand_node_matcher(
                 None => {
                     let controller = (self.make_controller)();
                     controller. #operation_id ( super:: #type_id {
-                        #(#initializer), *
+                        parameters: super:: #parameters_type_id {
+                            #(#initializer), *
+                        }
                     })
                         // Explicit parameter type is needed
                         // to not allow any response type.
@@ -205,6 +213,11 @@ impl<'a> Route<'a> {
 
     pub fn get_response_type_id(&self) -> syn::Ident {
         get_response_type_id(self.operation, &self.method, &self.path)
+    }
+
+    pub fn get_request_parameters_type_id(&self) -> syn::Ident {
+        let id = self.get_request_type_id();
+        get_request_parameters_type_id(&id)
     }
 }
 
