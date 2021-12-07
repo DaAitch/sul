@@ -6,8 +6,8 @@ use quote::quote;
 use crate::{
     id,
     naming::{
-        get_operation_id, get_parameter_id, get_request_parameters_type_id, get_request_type_id,
-        get_response_type_id,
+        get_operation_id, get_parameter_id, get_request_body_type_id,
+        get_request_parameters_type_id, get_request_type_id, get_response_type_id,
     },
     openapi::{check_path_parameters, OperationObject},
     OpenAPIExpansionContext, APISERVICE_CALL_METHOD_ID, APISERVICE_CALL_PATH_ID,
@@ -38,7 +38,7 @@ pub(crate) fn expand_route_matcher<'a>(
 
         let id = id(method);
         quote! {
-            &hyper::Method:: #id => {
+            hyper::Method:: #id => {
                 #method_match_arm_source
             }
         }
@@ -112,6 +112,7 @@ fn expand_node_matcher(
             // construct request types
             let type_id = route.get_request_type_id();
             let parameters_type_id = route.get_request_parameters_type_id();
+            let body_type_id = route.get_request_body_type_id();
 
             {
                 let fields = parameters.iter().map(get_parameter_id).map(|p| {
@@ -123,6 +124,7 @@ fn expand_node_matcher(
                 ctx.user_mod_sources.push(quote! {
                     pub struct #type_id {
                         pub parameters: #parameters_type_id,
+                        pub body: #body_type_id,
                     }
 
                     pub struct #parameters_type_id {
@@ -144,19 +146,32 @@ fn expand_node_matcher(
             Some(quote! {
                 None => {
                     let controller = (self.make_controller)();
-                    controller. #operation_id ( super:: #type_id {
-                        parameters: super:: #parameters_type_id {
-                            #(#initializer), *
+                    let parameters = super::#parameters_type_id {
+                        #(#initializer), *
+                    };
+
+                    async move {
+                        let body = hyper::body::to_bytes(request).await.unwrap(); // TODO: error handling
+                        let body = serde_json::from_slice::<super::#body_type_id>(body.as_ref());
+                        match body {
+                            Ok(body) => {
+                                let response: super::#response_type_id = controller.#operation_id ( super:: #type_id {
+                                    parameters,
+                                    body,
+                                }).await;
+
+                                let response: hyper::Response<hyper::Body> = response.into();
+                                response
+                            }
+                            Err(error) => {
+                                // TODO: make a handler?
+                                hyper::Response::builder()
+                                    .status(400)
+                                    .body(hyper::Body::from(format!("Error: {}", error)))
+                                    .unwrap()
+                            }
                         }
-                    })
-                        // Explicit parameter type is needed
-                        // to not allow any response type.
-                        // `.map_into::<Response<Body>>()` would lever out
-                        // that check.
-                        .map(|response: super::#response_type_id| {
-                            let response: Response<Body> = response.into();
-                            response
-                        }).boxed()
+                    }.boxed()
                 }
             })
         }
@@ -218,6 +233,11 @@ impl<'a> Route<'a> {
     pub fn get_request_parameters_type_id(&self) -> syn::Ident {
         let id = self.get_request_type_id();
         get_request_parameters_type_id(&id)
+    }
+
+    pub fn get_request_body_type_id(&self) -> syn::Ident {
+        let id = self.get_request_type_id();
+        get_request_body_type_id(&id)
     }
 }
 

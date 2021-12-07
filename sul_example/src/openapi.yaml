@@ -40,6 +40,14 @@ paths:
                     type: string
                   newRevision:
                     type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
       parameters:
         - name: id
           in: path

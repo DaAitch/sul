@@ -1,6 +1,5 @@
-use quote::format_ident;
-
 use crate::{get_status_name_lc, id, openapi::OperationObject, snake_case, upper_camel_case};
+use quote::format_ident;
 
 pub fn get_request_type_id(
     operation: &OperationObject,
@@ -91,4 +90,12 @@ pub fn get_prop_id(prop_name: impl AsRef<str>) -> syn::Ident {
 
 pub fn get_request_parameters_type_id(request_type_id: &syn::Ident) -> syn::Ident {
     format_ident!("{}{}", request_type_id, "Parameters")
+}
+
+pub fn get_request_body_type_id(request_type_id: &syn::Ident) -> syn::Ident {
+    format_ident!("{}{}", request_type_id, "Body")
+}
+
+pub fn get_schema_array_subtype_id(parent_prop_type_id: &syn::Ident) -> syn::Ident {
+    format_ident!("{}{}", parent_prop_type_id, "Item")
 }

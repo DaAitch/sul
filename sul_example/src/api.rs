@@ -39,17 +39,19 @@ impl ApiController {
         }
     }
 
-    pub async fn replace_user(self, _: ReplaceUserRequest) -> ReplaceUserResponse {
+    pub async fn replace_user(self, request: ReplaceUserRequest) -> ReplaceUserResponse {
+        let name = request.body.name;
+
         ReplaceUserResponse::ok(&ReplaceUserOk {
-            new_revision: "4321".to_owned(),
+            new_revision: format!("4321_for_{}", name),
             old_revision: "1234".to_owned(),
         })
     }
 
     pub async fn get_profiles(self, _: GetProfilesRequest) -> GetProfilesResponse {
-        GetProfilesResponse::ok(&vec![GetProfilesOk {
+        GetProfilesResponse::ok(&vec![GetProfilesOkItem {
             id: "1".to_owned(),
-            user: GetProfilesOkUser {
+            user: GetProfilesOkItemUser {
                 first_name: "Robert".to_owned(),
                 last_name: "Rust".to_owned(),
             },

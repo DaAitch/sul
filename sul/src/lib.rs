@@ -1,14 +1,17 @@
 #![feature(proc_macro_span)]
 
 use hyper::Method;
-use naming::{get_prop_id, get_schema_prop_type_id};
+use naming::{
+    get_prop_id, get_request_body_type_id, get_request_type_id, get_schema_array_subtype_id,
+    get_schema_prop_type_id,
+};
 use openapi::{OperationObject, ResponseObject, SchemaObject};
 use path::Route;
 use proc_macro::{Span, TokenStream};
 use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
 use quote::quote;
 use std::ops::Deref;
-use syn::{parse_macro_input, AttributeArgs, ItemStruct, Lit, NestedMeta, TypePath};
+use syn::{parse_macro_input, AttributeArgs, ItemStruct, Lit, NestedMeta};
 
 use crate::naming::{get_response_builder_param_type_id, get_response_type_id};
 
@@ -108,6 +111,7 @@ fn expand_route<'a>(
     operation: &'a OperationObject,
 ) -> Route<'a> {
     expand_response_source(ctx, &method, &path, operation);
+    expand_request_body_source(ctx, &method, &path, operation);
 
     path::Route {
         method,
@@ -129,8 +133,7 @@ fn expand_response_source(
 
     for (status_code, response) in &operation.responses {
         let type_id = get_response_builder_param_type_id(&operation, method, &path, status_code);
-        let data_type =
-            expand_schema_source(ctx, &type_id, &response.content.application_json.schema);
+        expand_schema_source(ctx, &type_id, &response.content.application_json.schema);
 
         let status_code_name_id = id(get_status_name_lc(status_code));
 
@@ -138,7 +141,7 @@ fn expand_response_source(
 
         impl_sources.push(quote! {
             #fn_doc_source
-            pub fn #status_code_name_id(data: &#data_type) -> #struct_id {
+            pub fn #status_code_name_id(data: &#type_id) -> #struct_id {
                 let content = serde_json::to_string(data).unwrap();
                 let body = hyper::Body::from(content);
 
@@ -173,45 +176,72 @@ fn expand_response_source(
     });
 }
 
+/// Expands at the http method, e.g. `paths./users.get` for the name "GetUsersRequestBody"
+fn expand_request_body_source(
+    ctx: &mut OpenAPIExpansionContext,
+    method: &Method,
+    path: impl AsRef<str>,
+    operation: &OperationObject,
+) {
+    let request_type_id = get_request_type_id(operation, method, path);
+    let request_body_type_id = get_request_body_type_id(&request_type_id);
+
+    match &operation.request_body {
+        Some(request_body) => {
+            expand_schema_source(
+                ctx,
+                &request_body_type_id,
+                &request_body.content.application_json.schema,
+            );
+        }
+        None => {
+            ctx.user_mod_sources.push(quote! {
+                #[derive(serde::Serialize, serde::Deserialize, Debug)]
+                pub struct #request_body_type_id {}
+            });
+        }
+    }
+}
+
 /// Expand schema source, returning the result type.
 fn expand_schema_source(
     ctx: &mut OpenAPIExpansionContext,
-    parent_prop_name_id: &syn::Ident,
+    type_id: &syn::Ident,
     schema: &SchemaObject,
-) -> TypePath {
+) {
     match schema {
         SchemaObject::Array(items_schema) => {
-            let sub_type = expand_schema_source(ctx, parent_prop_name_id, items_schema);
-            let array_type_string = format!(
-                "std::vec::Vec<{}>",
-                sub_type.path.get_ident().unwrap().to_string() // TODO: Vec<Vec<String>> will fail?
-            );
-
-            syn::parse_str(array_type_string.as_str()).unwrap()
+            let sub_type_id = get_schema_array_subtype_id(type_id);
+            expand_schema_source(ctx, &sub_type_id, items_schema);
+            ctx.user_mod_sources.push(quote! {
+                type #type_id = std::vec::Vec<#sub_type_id>;
+            });
         }
         SchemaObject::Object(props_schema) => {
             let mut struct_prop_sources = Vec::new();
             for (prop_name, prop_schema) in props_schema.deref() {
-                let name = get_schema_prop_type_id(parent_prop_name_id, prop_name);
-                let prop_type = expand_schema_source(ctx, &name, prop_schema);
+                let name = get_schema_prop_type_id(type_id, prop_name);
+                expand_schema_source(ctx, &name, prop_schema);
                 let prop_id = get_prop_id(prop_name);
 
                 struct_prop_sources.push(quote! {
                     #[serde(rename = #prop_name)]
-                    #prop_id: #prop_type
+                    #prop_id: #name
                 });
             }
 
             ctx.user_mod_sources.push(quote! {
-                #[derive(serde::Serialize, Debug)]
-                pub struct #parent_prop_name_id {
+                #[derive(serde::Serialize, serde::Deserialize, Debug)]
+                pub struct #type_id {
                     #(#struct_prop_sources), *
                 }
             });
-
-            syn::parse_str(parent_prop_name_id.to_string().as_str()).unwrap()
         }
-        SchemaObject::String => syn::parse_str("String").unwrap(),
+        SchemaObject::String => {
+            ctx.user_mod_sources.push(quote! {
+                type #type_id = String;
+            });
+        }
     }
 }
 
@@ -308,8 +338,8 @@ fn expand_service(
             }
 
             fn call(&mut self, request: Request<Body>) -> Self::Future {
-                let method = request.method();
-                let path = request.uri().path();
+                let method = request.method().clone();
+                let path = request.uri().path().to_owned();
 
                 let action = {
                     #route_matcher_source
