@@ -1,5 +1,7 @@
 # sul
 
+[![Rust](https://github.com/DaAitch/sul/actions/workflows/rust.yml/badge.svg)](https://github.com/DaAitch/sul/actions/workflows/rust.yml)
+
 *An WIP OpenAPI Rust Tower Service generator*
 
 <img src="sul-logo.svg" width="400"/> 
