@@ -57,4 +57,8 @@ impl ApiController {
             },
         }])
     }
+
+    pub async fn add_user(self, _: AddUserRequest) -> AddUserResponse {
+        AddUserResponse::ok(&AddUserOk { id: "1".to_owned() })
+    }
 }

@@ -2,7 +2,7 @@
 
 use hyper::Method;
 use serde::{
-    de::{MapAccess, Visitor},
+    de::{DeserializeSeed, MapAccess, Visitor},
     Deserialize, Deserializer,
 };
 use std::{collections::HashMap, fmt, path::Path};
@@ -26,7 +26,9 @@ pub struct Document {
     pub openapi: String,
     pub info: InfoObject,
     pub servers: Vec<ServerObject>,
-    pub paths: HashMap<String, PathItemObject>,
+    // TODO(daaitch): make optional
+    pub paths: HashMap<String, PathItemObjectOrRef>,
+    pub components: Option<ComponentsObject>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -40,6 +42,100 @@ pub struct InfoObject {
 pub struct ServerObject {
     pub url: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum PathItemObjectOrRef {
+    Ref(String),
+    Object(PathItemObject),
+}
+
+impl<'de> Deserialize<'de> for PathItemObjectOrRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+
+        impl<'de> Visitor<'de> for V {
+            type Value = PathItemObjectOrRef;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("Path Item Object or $ref")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                #[derive(Deserialize, Debug, PartialEq, Eq, Hash)]
+                #[serde(field_identifier, rename_all = "lowercase")]
+                enum Key {
+                    #[serde(rename = "$ref")]
+                    Ref,
+                    Get,
+                    Put,
+                    Post,
+                    Delete,
+                    Options,
+                    Head,
+                    Patch,
+                    Trace,
+                }
+
+                let mut r#ref: Option<String> = None;
+                let mut methods: HashMap<Key, OperationObject> = Default::default();
+
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Ref => {
+                            r#ref = Some(map.next_value()?);
+                        }
+                        method => {
+                            methods.insert(method, map.next_value()?);
+                        }
+                    }
+                }
+
+                match r#ref {
+                    Some(r#ref) => {
+                        if !methods.is_empty() {
+                            return Err(serde::de::Error::invalid_value(
+                                serde::de::Unexpected::StructVariant,
+                                &self,
+                            ));
+                        }
+
+                        Ok(PathItemObjectOrRef::Ref(r#ref))
+                    }
+                    None => Ok(PathItemObjectOrRef::Object(PathItemObject {
+                        get: methods.remove(&Key::Get),
+                        put: methods.remove(&Key::Put),
+                        post: methods.remove(&Key::Post),
+                        delete: methods.remove(&Key::Delete),
+                        options: methods.remove(&Key::Options),
+                        head: methods.remove(&Key::Head),
+                        patch: methods.remove(&Key::Patch),
+                        trace: methods.remove(&Key::Trace),
+                    })),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(V)
+    }
+}
+
+impl PathItemObjectOrRef {
+    pub fn get_or_find<'a>(&'a self, document: &'a Document) -> Option<&'a PathItemObject> {
+        match &self {
+            &PathItemObjectOrRef::Object(object) => Some(object),
+            &PathItemObjectOrRef::Ref(dollar_ref) => {
+                if let Ok(RefType::PathItem(p)) = get_ref(dollar_ref, document) {
+                    p.get_or_find(document)
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -230,4 +326,59 @@ pub struct RequestBodyObject {
     pub description: Option<String>,
     pub content: MediaTypeObjectMap,
     pub required: Option<bool>,
+}
+
+pub enum RefType<'a> {
+    // Schema(&'a SchemaObject),
+    PathItem(&'a PathItemObjectOrRef),
+}
+
+fn get_ref<'a>(
+    dollar_ref: impl AsRef<str>,
+    document: &'a Document,
+) -> std::result::Result<RefType<'a>, ()> {
+    // example: "#/components/schemas/User"
+    let mut it = dollar_ref.as_ref().split('/');
+    match it.next() {
+        Some("#") => match it.next() {
+            Some("components") => match it.next() {
+                // Some("schemas") => match it.next() {
+                //     Some(name) => match it.next() {
+                //         None => {
+                //             let components = document.components.as_ref().ok_or(())?;
+                //             let schemas = components.schemas.as_ref().ok_or(())?;
+                //             let schema = schemas.get(&name.to_string()).ok_or(())?;
+
+                //             Ok(RefType::Schema(schema))
+                //         }
+                //         _ => Err(()),
+                //     },
+                //     _ => Err(()),
+                // },
+                Some("pathItems") => match it.next() {
+                    Some(name) => match it.next() {
+                        None => {
+                            let components = document.components.as_ref().ok_or(())?;
+                            let path_items = components.path_items.as_ref().ok_or(())?;
+                            let path_item = path_items.get(&name.to_string()).ok_or(())?;
+
+                            Ok(RefType::PathItem(path_item))
+                        }
+                        _ => Err(()),
+                    },
+                    _ => Err(()),
+                },
+                _ => Err(()),
+            },
+            _ => Err(()),
+        },
+        _ => Err(()),
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ComponentsObject {
+    // pub schemas: Option<HashMap<String, SchemaObject>>,
+    #[serde(rename = "pathItems")]
+    pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
 }

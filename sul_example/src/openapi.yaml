@@ -76,25 +76,56 @@ paths:
                     type: string
                   errorMessage:
                     type: string
-  /profiles:
-    get:
+    post:
+      operationId: addUser
+      summary: Adds a new user.
+      description: Some text
       responses:
         '200':
-          description: Returns all profiles.
+          description: Some text
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    user:
-                      type: object
-                      properties:
-                        firstName:
-                          type: string
-                        lastName:
-                          type: string
-                  
+                type: object
+                properties:
+                  id:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+      parameters:
+        - name: id
+          in: path
+          required: true
+  /profiles:
+    $ref: "#/components/pathItems/profiles"
+components:
+  pathItems:
+    profiles:
+      get:
+        responses:
+          '200':
+            description: Returns all profiles.
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      user:
+                        type: object
+                        properties:
+                          firstName:
+                            type: string
+                          lastName:
+                            type: string

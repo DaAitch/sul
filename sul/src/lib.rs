@@ -53,6 +53,7 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut routes = Vec::new();
 
     for (path, item) in &document.paths {
+        let item = item.get_or_find(&document).expect("damn!");
         for (method, operation) in [
             (Method::GET, &item.get),
             (Method::PUT, &item.put),
