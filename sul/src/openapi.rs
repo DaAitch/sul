@@ -95,7 +95,7 @@ impl<'de> Deserialize<'de> for PathItemObjectRef {
                 } else {
                     Err(serde::de::Error::invalid_value(
                         serde::de::Unexpected::Str(v),
-                        &PREFIX,
+                        &self
                     ))
                 }
             }

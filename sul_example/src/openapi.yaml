@@ -105,7 +105,7 @@ paths:
           in: path
           required: true
   /profiles:
-    $ref: "#/components/pathItems/profiles"
+    $ref: "#/components/pathIems/profiles"
 components:
   pathItems:
     profiles:
