@@ -5,7 +5,7 @@ use naming::{
     get_prop_id, get_request_body_type_id, get_request_type_id, get_schema_array_subtype_id,
     get_schema_prop_type_id,
 };
-use openapi::{OperationObject, ResponseObject, SchemaObject};
+use openapi::{Document, OperationObject, ResponseObject, SchemaObject};
 use path::Route;
 use proc_macro::{Span, TokenStream};
 use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
@@ -26,10 +26,20 @@ mod path;
 const APISERVICE_CALL_PATH_ID: &str = "path";
 const APISERVICE_CALL_METHOD_ID: &str = "method";
 
-#[derive(Default)]
-struct OpenAPIExpansionContext {
+struct OpenAPIExpansionContext<'a> {
+    document: &'a Document,
     user_mod_sources: Vec<TokenStream2>,
     service_mod_sources: Vec<TokenStream2>,
+}
+
+impl<'a> OpenAPIExpansionContext<'a> {
+    fn new(document: &'a Document) -> Self {
+        Self {
+            document,
+            user_mod_sources: Vec::new(),
+            service_mod_sources: Vec::new(),
+        }
+    }
 }
 
 #[proc_macro_attribute]
@@ -49,11 +59,15 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
         openapi::Document::from_file(yaml_file_path).unwrap()
     };
 
-    let mut ctx = OpenAPIExpansionContext::default();
+    let mut ctx = OpenAPIExpansionContext::new(&document);
     let mut routes = Vec::new();
 
     for (path, item) in &document.paths {
-        let item = item.get_or_find(&document).expect("damn!");
+        // TODO(daaitch): good error message
+        let item = document
+            .get_path_item_ref(item)
+            .expect("cannot find path item $ref");
+
         for (method, operation) in [
             (Method::GET, &item.get),
             (Method::PUT, &item.put),
@@ -134,7 +148,11 @@ fn expand_response_source(
 
     for (status_code, response) in &operation.responses {
         let type_id = get_response_builder_param_type_id(&operation, method, &path, status_code);
-        expand_schema_source(ctx, &type_id, &response.content.application_json.schema);
+        let schema = ctx
+            .document
+            .get_schema_ref(&response.content.application_json.schema)
+            .expect("TODO");
+        expand_schema_source(ctx, &type_id, schema);
 
         let status_code_name_id = id(get_status_name_lc(status_code));
 
@@ -189,11 +207,11 @@ fn expand_request_body_source(
 
     match &operation.request_body {
         Some(request_body) => {
-            expand_schema_source(
-                ctx,
-                &request_body_type_id,
-                &request_body.content.application_json.schema,
-            );
+            let schema = ctx
+                .document
+                .get_schema_ref(&request_body.content.application_json.schema)
+                .expect("TODO");
+            expand_schema_source(ctx, &request_body_type_id, schema);
         }
         None => {
             ctx.user_mod_sources.push(quote! {

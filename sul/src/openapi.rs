@@ -33,15 +33,33 @@ impl Document {
 
     pub fn get_path_item_ref<'a>(
         &'a self,
-        path_item_ref: &PathItemObjectRef,
-    ) -> std::result::Result<&'a PathItemObject, ()> {
-        let components = self.components.as_ref().ok_or(())?;
-        let path_items = components.path_items.as_ref().ok_or(())?;
-        let path_item = path_items.get(&path_item_ref.name).ok_or(())?;
-
-        match path_item {
+        object_or_ref: &'a PathItemObjectOrRef,
+    ) -> Result<&'a PathItemObject, ()> {
+        match object_or_ref {
             PathItemObjectOrRef::Object(object) => Ok(object),
-            PathItemObjectOrRef::Ref(r) => self.get_path_item_ref(r), // recursion
+            PathItemObjectOrRef::Ref(r) => {
+                let components = self.components.as_ref().ok_or(())?;
+                let path_items = components.path_items.as_ref().ok_or(())?;
+                let path_item = path_items.get(&r.name).ok_or(())?;
+
+                self.get_path_item_ref(path_item) // recursion
+            }
+        }
+    }
+
+    pub fn get_schema_ref<'a>(
+        &'a self,
+        object_or_ref: &'a SchemaObjectOrRef,
+    ) -> Result<&'a SchemaObject, ()> {
+        match object_or_ref {
+            SchemaObjectOrRef::Object(object) => Ok(object),
+            SchemaObjectOrRef::Ref(r) => {
+                let components = self.components.as_ref().ok_or(())?;
+                let schemas = components.schemas.as_ref().ok_or(())?;
+                let schema = schemas.get(&r.name).ok_or(())?;
+
+                self.get_schema_ref(schema) // recursion
+            }
         }
     }
 }
@@ -80,6 +98,7 @@ pub struct PathItemObjectRef {
     name: String,
 }
 
+// TODO(daaitch): duplicated code, see SchemaObjectRef
 impl<'de> Deserialize<'de> for PathItemObjectRef {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         struct V;
@@ -121,21 +140,7 @@ pub enum PathItemObjectOrRef {
     Object(PathItemObject),
 }
 
-impl PathItemObjectOrRef {
-    pub fn get_or_find<'a>(&'a self, document: &'a Document) -> Option<&'a PathItemObject> {
-        match &self {
-            &PathItemObjectOrRef::Object(object) => Some(object),
-            &PathItemObjectOrRef::Ref(r) => {
-                if let Ok(p) = document.get_path_item_ref(r) {
-                    Some(p)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
+// TODO(daaitch): duplicated code, see SchemaObjectOrRef
 impl<'de> Deserialize<'de> for PathItemObjectOrRef {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         struct V;
@@ -274,7 +279,7 @@ pub struct MediaTypeObjectMap {
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#media-type-object>
 #[derive(Deserialize, Debug)]
 pub struct MediaTypeObjectJson {
-    pub schema: SchemaObject,
+    pub schema: SchemaObjectOrRef,
 }
 
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#schema-object>
@@ -352,9 +357,141 @@ impl<'de> Deserialize<'de> for SchemaObject {
             }
         }
 
-        const FIELDS: &[&str] = &["type", "items", "properties"];
+        deserializer.deserialize_map(V)
+    }
+}
 
-        deserializer.deserialize_struct("SpecSchema", FIELDS, V)
+#[derive(Debug)]
+pub struct SchemaObjectRef {
+    name: String,
+}
+
+// TODO(daaitch): duplicated code, see PathItemObjectRef
+impl<'de> Deserialize<'de> for SchemaObjectRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+
+        const PREFIX: &str = "#/components/schemas/";
+
+        impl<'de> Visitor<'de> for V {
+            type Value = SchemaObjectRef;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "{}..", PREFIX)
+            }
+
+            fn visit_str<E: serde::de::Error>(
+                self,
+                v: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                if v.starts_with(PREFIX) {
+                    Ok(SchemaObjectRef {
+                        name: v[PREFIX.len()..].to_string(),
+                    })
+                } else {
+                    Err(serde::de::Error::invalid_value(
+                        serde::de::Unexpected::Str(v),
+                        &self,
+                    ))
+                }
+            }
+        }
+
+        deserializer.deserialize_str(V)
+    }
+}
+
+#[derive(Debug)]
+pub enum SchemaObjectOrRef {
+    Ref(SchemaObjectRef),
+    Object(SchemaObject),
+}
+
+// TODO(daaitch): duplicated code, see PathItemObjectOrRef
+impl<'de> Deserialize<'de> for SchemaObjectOrRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+
+        impl<'de> Visitor<'de> for V {
+            type Value = SchemaObjectOrRef;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                // TODO(daaitch): expecting message
+                write!(formatter, "Schema Object or $ref")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                #[derive(Deserialize, Debug)]
+                #[serde(field_identifier, rename_all = "camelCase")]
+                enum Schema {
+                    #[serde(rename = "$ref")]
+                    Ref,
+                    Type,
+                    Items,
+                    Properties,
+                }
+
+                #[derive(Deserialize, Debug)]
+                #[serde(field_identifier, rename_all = "camelCase")]
+                enum Type {
+                    Array,
+                    String,
+                    Object,
+                }
+
+                let mut r: Option<SchemaObjectRef> = None;
+                let mut ty: Option<Type> = None;
+                let mut items: Option<SchemaObject> = None;
+                let mut properties: Option<HashMap<String, SchemaObject>> = None;
+
+                while let Some(key) = map.next_key::<Schema>()? {
+                    match key {
+                        Schema::Type => {
+                            ty = Some(map.next_value()?);
+                        }
+                        Schema::Items => {
+                            items = Some(map.next_value()?);
+                        }
+                        Schema::Properties => {
+                            properties = Some(map.next_value()?);
+                        }
+                        Schema::Ref => {
+                            r = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                match r {
+                    Some(r) => {
+                        match (ty, items, properties) {
+                            (None, None, None) => Ok(SchemaObjectOrRef::Ref(r)),
+                            _ => {
+                                // TODO(daaitch): better error message
+                                Err(serde::de::Error::custom("given $ref, doesn't expecting other fields"))
+                            }
+                        }
+                    }
+                    None => match ty {
+                        None => Err(serde::de::Error::missing_field("type")),
+                        Some(Type::Array) => match items {
+                            None => Err(serde::de::Error::missing_field("items")),
+                            Some(items) => Ok(SchemaObjectOrRef::Object(SchemaObject::Array(
+                                Box::new(items),
+                            ))),
+                        },
+                        Some(Type::Object) => match properties {
+                            None => Err(serde::de::Error::missing_field("properties")),
+                            Some(properties) => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::Object(Box::new(properties)),
+                            )),
+                        },
+                        Some(Type::String) => Ok(SchemaObjectOrRef::Object(SchemaObject::String)),
+                    },
+                }
+            }
+        }
+
+        deserializer.deserialize_map(V)
     }
 }
 
@@ -390,6 +527,6 @@ pub struct RequestBodyObject {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentsObject {
-    // pub schemas: Option<HashMap<String, SchemaObject>>,
+    pub schemas: Option<HashMap<String, SchemaObjectOrRef>>,
     pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
 }

@@ -62,9 +62,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: 
-                  type: string
+                $ref: "#/components/schemas/UserGet"
         '401':
           description: Some text
           content:
@@ -129,3 +127,8 @@ components:
                             type: string
                           lastName:
                             type: string
+  schemas:
+    UserGet:
+      type: array
+      items:
+        type: string
