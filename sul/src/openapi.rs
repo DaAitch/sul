@@ -8,13 +8,12 @@ use serde::{
 use std::{collections::HashMap, fmt, path::Path};
 
 #[derive(Debug)]
-pub enum Error {
+pub enum ReadFileError {
     ReadFile(std::io::Error),
     Yaml(serde_yaml::Error),
 }
 
-type Result<T> = std::result::Result<T, Error>;
-
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#openapi-object>
 #[derive(Deserialize, Debug)]
 pub struct Document {
     pub openapi: String,
@@ -26,6 +25,12 @@ pub struct Document {
 }
 
 impl Document {
+    pub fn from_file(file_path: impl AsRef<Path>) -> Result<Self, ReadFileError> {
+        let file = std::fs::File::open(file_path).map_err(ReadFileError::ReadFile)?;
+        let spec: Document = serde_yaml::from_reader(file).map_err(ReadFileError::Yaml)?;
+        Ok(spec)
+    }
+
     pub fn get_path_item_ref<'a>(
         &'a self,
         path_item_ref: &PathItemObjectRef,
@@ -41,6 +46,7 @@ impl Document {
     }
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#info-object>
 #[derive(Deserialize, Debug)]
 pub struct InfoObject {
     pub title: Option<String>,
@@ -48,12 +54,14 @@ pub struct InfoObject {
     pub version: Option<String>,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#server-object>
 #[derive(Deserialize, Debug)]
 pub struct ServerObject {
     pub url: String,
     pub description: Option<String>,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#path-item-object>
 #[derive(Deserialize, Debug)]
 pub struct PathItemObject {
     pub get: Option<OperationObject>,
@@ -66,6 +74,7 @@ pub struct PathItemObject {
     pub trace: Option<OperationObject>,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#path-item-object>
 #[derive(Debug)]
 pub struct PathItemObjectRef {
     name: String,
@@ -95,7 +104,7 @@ impl<'de> Deserialize<'de> for PathItemObjectRef {
                 } else {
                     Err(serde::de::Error::invalid_value(
                         serde::de::Unexpected::Str(v),
-                        &self
+                        &self,
                     ))
                 }
             }
@@ -105,6 +114,7 @@ impl<'de> Deserialize<'de> for PathItemObjectRef {
     }
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#path-item-object>
 #[derive(Debug)]
 pub enum PathItemObjectOrRef {
     Ref(PathItemObjectRef),
@@ -142,7 +152,7 @@ impl<'de> Deserialize<'de> for PathItemObjectOrRef {
                 mut map: A,
             ) -> std::result::Result<Self::Value, A::Error> {
                 #[derive(Deserialize, Debug, PartialEq, Eq, Hash)]
-                #[serde(field_identifier, rename_all = "lowercase")]
+                #[serde(field_identifier, rename_all = "camelCase")]
                 enum Key {
                     #[serde(rename = "$ref")]
                     Ref,
@@ -199,19 +209,19 @@ impl<'de> Deserialize<'de> for PathItemObjectOrRef {
     }
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#operation-object>
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationObject {
-    #[serde(rename = "operationId")]
     pub operation_id: Option<String>,
     pub summary: Option<String>,
     pub description: Option<String>,
     pub responses: HashMap<String, ResponseObject>, // response or ref-object
     pub parameters: Option<Vec<ParameterObject>>,
-    #[serde(rename = "requestBody")]
     pub request_body: Option<RequestBodyObject>,
 }
 
-/// https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#responseObject
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#responseObject>
 #[derive(Deserialize, Debug)]
 pub struct ResponseObject {
     pub description: String,
@@ -224,11 +234,13 @@ pub struct MediaTypeObjectMap {
     pub application_json: MediaTypeObjectJson,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#media-type-object>
 #[derive(Deserialize, Debug)]
 pub struct MediaTypeObjectJson {
     pub schema: SchemaObject,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#schema-object>
 #[derive(Debug)]
 pub enum SchemaObject {
     Array(Box<SchemaObject>),
@@ -252,7 +264,7 @@ impl<'de> Deserialize<'de> for SchemaObject {
                 mut map: A,
             ) -> std::result::Result<Self::Value, A::Error> {
                 #[derive(Deserialize, Debug)]
-                #[serde(field_identifier, rename_all = "lowercase")]
+                #[serde(field_identifier, rename_all = "camelCase")]
                 enum Schema {
                     Type,
                     Items,
@@ -260,7 +272,7 @@ impl<'de> Deserialize<'de> for SchemaObject {
                 }
 
                 #[derive(Deserialize, Debug)]
-                #[serde(field_identifier, rename_all = "lowercase")]
+                #[serde(field_identifier, rename_all = "camelCase")]
                 enum Type {
                     Array,
                     String,
@@ -309,6 +321,7 @@ impl<'de> Deserialize<'de> for SchemaObject {
     }
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#parameter-object>
 #[derive(Deserialize, Debug)]
 pub struct ParameterObject {
     pub name: String,
@@ -318,18 +331,17 @@ pub struct ParameterObject {
     pub deprecated: Option<bool>,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#parameter-locations>
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub enum ParameterLocation {
-    #[serde(rename = "query")]
     Query,
-    #[serde(rename = "header")]
     Header,
-    #[serde(rename = "path")]
     Path,
-    #[serde(rename = "cookie")]
     Cookie,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#request-body-object>
 #[derive(Deserialize, Debug)]
 pub struct RequestBodyObject {
     pub description: Option<String>,
@@ -337,17 +349,12 @@ pub struct RequestBodyObject {
     pub required: Option<bool>,
 }
 
+/// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#components-object>
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentsObject {
     // pub schemas: Option<HashMap<String, SchemaObject>>,
-    #[serde(rename = "pathItems")]
     pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
-}
-
-pub fn read_openapi<'a>(file_path: impl AsRef<Path>) -> Result<Document> {
-    let file = std::fs::File::open(file_path).map_err(Error::ReadFile)?;
-    let spec: Document = serde_yaml::from_reader(file).map_err(Error::Yaml)?;
-    Ok(spec)
 }
 
 pub fn check_path_parameters<'a>(

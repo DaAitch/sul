@@ -46,7 +46,7 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
         let parent = path.parent().unwrap();
         let yaml_file_path = parent.join(yaml_filename);
 
-        openapi::read_openapi(yaml_file_path).unwrap()
+        openapi::Document::from_file(yaml_file_path).unwrap()
     };
 
     let mut ctx = OpenAPIExpansionContext::default();
