@@ -2,7 +2,7 @@
 
 use hyper::Method;
 use serde::{
-    de::{DeserializeSeed, MapAccess, Visitor},
+    de::{MapAccess, Visitor},
     Deserialize, Deserializer,
 };
 use std::{collections::HashMap, fmt, path::Path};
@@ -15,12 +15,6 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-pub fn read_openapi<'a>(file_path: impl AsRef<Path>) -> Result<Document> {
-    let file = std::fs::File::open(file_path).map_err(Error::ReadFile)?;
-    let spec: Document = serde_yaml::from_reader(file).map_err(Error::Yaml)?;
-    Ok(spec)
-}
-
 #[derive(Deserialize, Debug)]
 pub struct Document {
     pub openapi: String,
@@ -29,6 +23,22 @@ pub struct Document {
     // TODO(daaitch): make optional
     pub paths: HashMap<String, PathItemObjectOrRef>,
     pub components: Option<ComponentsObject>,
+}
+
+impl Document {
+    pub fn get_path_item_ref<'a>(
+        &'a self,
+        path_item_ref: &PathItemObjectRef,
+    ) -> std::result::Result<&'a PathItemObject, ()> {
+        let components = self.components.as_ref().ok_or(())?;
+        let path_items = components.path_items.as_ref().ok_or(())?;
+        let path_item = path_items.get(&path_item_ref.name).ok_or(())?;
+
+        match path_item {
+            PathItemObjectOrRef::Object(object) => Ok(object),
+            PathItemObjectOrRef::Ref(r) => self.get_path_item_ref(r), // recursion
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -44,10 +54,76 @@ pub struct ServerObject {
     pub description: Option<String>,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct PathItemObject {
+    pub get: Option<OperationObject>,
+    pub put: Option<OperationObject>,
+    pub post: Option<OperationObject>,
+    pub delete: Option<OperationObject>,
+    pub options: Option<OperationObject>,
+    pub head: Option<OperationObject>,
+    pub patch: Option<OperationObject>,
+    pub trace: Option<OperationObject>,
+}
+
+#[derive(Debug)]
+pub struct PathItemObjectRef {
+    name: String,
+}
+
+impl<'de> Deserialize<'de> for PathItemObjectRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+
+        const PREFIX: &str = "#/components/pathItems/";
+
+        impl<'de> Visitor<'de> for V {
+            type Value = PathItemObjectRef;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "{}..", PREFIX)
+            }
+
+            fn visit_str<E: serde::de::Error>(
+                self,
+                v: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                if v.starts_with(PREFIX) {
+                    Ok(PathItemObjectRef {
+                        name: v[PREFIX.len()..].to_string(),
+                    })
+                } else {
+                    Err(serde::de::Error::invalid_value(
+                        serde::de::Unexpected::Str(v),
+                        &PREFIX,
+                    ))
+                }
+            }
+        }
+
+        deserializer.deserialize_str(V)
+    }
+}
+
 #[derive(Debug)]
 pub enum PathItemObjectOrRef {
-    Ref(String),
+    Ref(PathItemObjectRef),
     Object(PathItemObject),
+}
+
+impl PathItemObjectOrRef {
+    pub fn get_or_find<'a>(&'a self, document: &'a Document) -> Option<&'a PathItemObject> {
+        match &self {
+            &PathItemObjectOrRef::Object(object) => Some(object),
+            &PathItemObjectOrRef::Ref(r) => {
+                if let Ok(p) = document.get_path_item_ref(r) {
+                    Some(p)
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for PathItemObjectOrRef {
@@ -80,7 +156,7 @@ impl<'de> Deserialize<'de> for PathItemObjectOrRef {
                     Trace,
                 }
 
-                let mut r#ref: Option<String> = None;
+                let mut r#ref: Option<PathItemObjectRef> = None;
                 let mut methods: HashMap<Key, OperationObject> = Default::default();
 
                 while let Some(key) = map.next_key::<Key>()? {
@@ -121,33 +197,6 @@ impl<'de> Deserialize<'de> for PathItemObjectOrRef {
 
         deserializer.deserialize_any(V)
     }
-}
-
-impl PathItemObjectOrRef {
-    pub fn get_or_find<'a>(&'a self, document: &'a Document) -> Option<&'a PathItemObject> {
-        match &self {
-            &PathItemObjectOrRef::Object(object) => Some(object),
-            &PathItemObjectOrRef::Ref(dollar_ref) => {
-                if let Ok(RefType::PathItem(p)) = get_ref(dollar_ref, document) {
-                    p.get_or_find(document)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
-#[derive(Deserialize, Debug)]
-pub struct PathItemObject {
-    pub get: Option<OperationObject>,
-    pub put: Option<OperationObject>,
-    pub post: Option<OperationObject>,
-    pub delete: Option<OperationObject>,
-    pub options: Option<OperationObject>,
-    pub head: Option<OperationObject>,
-    pub patch: Option<OperationObject>,
-    pub trace: Option<OperationObject>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -281,6 +330,26 @@ pub enum ParameterLocation {
     Cookie,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct RequestBodyObject {
+    pub description: Option<String>,
+    pub content: MediaTypeObjectMap,
+    pub required: Option<bool>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ComponentsObject {
+    // pub schemas: Option<HashMap<String, SchemaObject>>,
+    #[serde(rename = "pathItems")]
+    pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
+}
+
+pub fn read_openapi<'a>(file_path: impl AsRef<Path>) -> Result<Document> {
+    let file = std::fs::File::open(file_path).map_err(Error::ReadFile)?;
+    let spec: Document = serde_yaml::from_reader(file).map_err(Error::Yaml)?;
+    Ok(spec)
+}
+
 pub fn check_path_parameters<'a>(
     parameters: impl IntoIterator<Item = &'a String>,
     operation: &OperationObject,
@@ -319,66 +388,4 @@ pub fn check_path_parameters<'a>(
     }
 
     Ok(())
-}
-
-#[derive(Deserialize, Debug)]
-pub struct RequestBodyObject {
-    pub description: Option<String>,
-    pub content: MediaTypeObjectMap,
-    pub required: Option<bool>,
-}
-
-pub enum RefType<'a> {
-    // Schema(&'a SchemaObject),
-    PathItem(&'a PathItemObjectOrRef),
-}
-
-fn get_ref<'a>(
-    dollar_ref: impl AsRef<str>,
-    document: &'a Document,
-) -> std::result::Result<RefType<'a>, ()> {
-    // example: "#/components/schemas/User"
-    let mut it = dollar_ref.as_ref().split('/');
-    match it.next() {
-        Some("#") => match it.next() {
-            Some("components") => match it.next() {
-                // Some("schemas") => match it.next() {
-                //     Some(name) => match it.next() {
-                //         None => {
-                //             let components = document.components.as_ref().ok_or(())?;
-                //             let schemas = components.schemas.as_ref().ok_or(())?;
-                //             let schema = schemas.get(&name.to_string()).ok_or(())?;
-
-                //             Ok(RefType::Schema(schema))
-                //         }
-                //         _ => Err(()),
-                //     },
-                //     _ => Err(()),
-                // },
-                Some("pathItems") => match it.next() {
-                    Some(name) => match it.next() {
-                        None => {
-                            let components = document.components.as_ref().ok_or(())?;
-                            let path_items = components.path_items.as_ref().ok_or(())?;
-                            let path_item = path_items.get(&name.to_string()).ok_or(())?;
-
-                            Ok(RefType::PathItem(path_item))
-                        }
-                        _ => Err(()),
-                    },
-                    _ => Err(()),
-                },
-                _ => Err(()),
-            },
-            _ => Err(()),
-        },
-        _ => Err(()),
-    }
-}
-
-#[derive(Deserialize, Debug)]
-pub struct ComponentsObject {
-    // pub schemas: Option<HashMap<String, SchemaObject>>,
-    #[serde(rename = "pathItems")]
-    pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
 }
