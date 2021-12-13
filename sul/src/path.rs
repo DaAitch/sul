@@ -9,7 +9,7 @@ use crate::{
         get_operation_id, get_parameter_id, get_request_body_type_id,
         get_request_parameters_type_id, get_request_type_id, get_response_type_id,
     },
-    openapi::{check_path_parameters, OperationObject},
+    openapi::OperationObject,
     OpenAPIExpansionContext, APISERVICE_CALL_METHOD_ID, APISERVICE_CALL_PATH_ID,
 };
 
@@ -106,7 +106,9 @@ fn expand_node_matcher(
     let none_arm_source = match node.route {
         Some(route) => {
             // validate that path parameters
-            check_path_parameters(parameters, route.operation, &route.method, &route.path)
+            route
+                .operation
+                .check_path_parameters(parameters, &route.method, &route.path)
                 .expect("Path parameters have to be valid");
 
             // construct request types

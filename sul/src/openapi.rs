@@ -221,6 +221,43 @@ pub struct OperationObject {
     pub request_body: Option<RequestBodyObject>,
 }
 
+impl OperationObject {
+    pub fn check_path_parameters<'a>(
+        &self,
+        parameters: impl IntoIterator<Item = &'a String>,
+        method: &Method,
+        path: impl AsRef<str>,
+    ) -> std::result::Result<(), String> {
+        for parameter in parameters {
+            let what = || format!("'{}' in '{} {}'", parameter, method, path.as_ref());
+
+            let parameters = self
+                .parameters
+                .as_ref()
+                .ok_or_else(|| format!("absent parameters for {}", what()))?;
+
+            match parameters
+                .into_iter()
+                .find(|p| &p.name == parameter && p.r#in == ParameterLocation::Path)
+            {
+                Some(param) => {
+                    if param.required != Some(true) {
+                        Err(format!(
+                            "parameter {} is missing field 'required = true'",
+                            what()
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+                None => Err(format!("missing path parameter for {}", what())),
+            }?;
+        }
+
+        Ok(())
+    }
+}
+
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#responseObject>
 #[derive(Deserialize, Debug)]
 pub struct ResponseObject {
@@ -355,44 +392,4 @@ pub struct RequestBodyObject {
 pub struct ComponentsObject {
     // pub schemas: Option<HashMap<String, SchemaObject>>,
     pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
-}
-
-pub fn check_path_parameters<'a>(
-    parameters: impl IntoIterator<Item = &'a String>,
-    operation: &OperationObject,
-    method: &Method,
-    path: impl AsRef<str>,
-) -> std::result::Result<(), String> {
-    let empty_parameter = Vec::new();
-
-    for parameter in parameters {
-        match operation
-            .parameters
-            .as_ref()
-            .unwrap_or(&empty_parameter)
-            .into_iter()
-            .find(|p| &p.name == parameter && p.r#in == ParameterLocation::Path)
-        {
-            Some(param) => {
-                if param.required != Some(true) {
-                    Err(format!(
-                        "path parameter '{}' in '{} {}' is missing field 'required = true'",
-                        parameter,
-                        method,
-                        path.as_ref()
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-            None => Err(format!(
-                "missing path parameter '{}' in '{} {}'",
-                parameter,
-                method,
-                path.as_ref()
-            )),
-        }?;
-    }
-
-    Ok(())
 }
