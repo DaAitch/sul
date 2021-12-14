@@ -55,3 +55,49 @@ impl ApiController {
 ```
 
 so that I can concentrate on my real problems.
+
+## Features
+
+There are a lot of missing features which are easy to implement, but the current focus in on crosscutting.
+
+- OpenAPI file formats
+  - [x] Yaml
+  - [ ] JSON
+- Paths
+  - [x] Path Templates
+  - [x] Request Body
+  - [x] $ref Path Item Object
+- Parameter Types
+  - [x] Path
+  - [ ] Query
+  - [ ] Header
+  - [ ] Cookie
+- Methods
+  - [x] GET
+  - [x] PUT
+  - [x] POST
+  - [x] DELETE
+  - [x] OPTIONS
+  - [x] HEAD
+  - [x] PATCH
+  - [x] TRACE
+- Responses
+  - [x] 200: Ok
+  - [x] 401: Unauthorized
+  - [ ] other status codes
+- Content types
+  - [x] JSON
+  - [ ] other formats
+- Schema Types
+  - [x] String
+  - [ ] Integer
+  - [ ] Number
+  - [x] Array
+  - [x] Object
+  - [ ] other types
+  - [x] $ref Schema Object
+- Components
+  - [x] Path Items
+  - [x] Schemas
+  - [ ] other maps
+- [ ] external $ref files
