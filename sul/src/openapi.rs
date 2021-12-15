@@ -292,6 +292,17 @@ pub enum SchemaObject {
     Object(Box<HashMap<String, SchemaObject>>),
 }
 
+impl SchemaObject {
+    fn is_scalar(&self) -> bool {
+        match self {
+            &SchemaObject::String(_) => true,
+            &SchemaObject::Integer(_) => true,
+            &SchemaObject::Number(_) => true,
+            _ => false
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum DataTypeStringFormat {
     None,
@@ -507,14 +518,74 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
     }
 }
 
+#[derive(Debug)]
+pub enum ParameterObjectContentOrSchema {
+    Content(MediaTypeObjectMap),
+    Schema(SchemaObjectOrRef),
+}
+
+impl ParameterObjectContentOrSchema {
+    pub fn get_schema<'a>(&'a self, document: &'a Document) -> Result<&'a SchemaObject, ()> {
+        let schema_or_ref = match self {
+            ParameterObjectContentOrSchema::Schema(schema) => {
+                schema
+            },
+            ParameterObjectContentOrSchema::Content(content) => {
+                &content.application_json.schema
+            },
+        };
+
+        document.get_schema_ref(schema_or_ref)
+    }
+}
+
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#parameter-object>
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub struct ParameterObject {
     pub name: String,
     pub r#in: ParameterLocation,
     pub description: Option<String>,
     pub required: Option<bool>,
     pub deprecated: Option<bool>,
+    pub schema_or_content: ParameterObjectContentOrSchema,
+}
+
+impl<'de> Deserialize<'de> for ParameterObject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize, Debug)]
+        struct ParameterObjectReadHelper {
+            name: String,
+            r#in: ParameterLocation,
+            description: Option<String>,
+            required: Option<bool>,
+            deprecated: Option<bool>,
+            schema: Option<SchemaObjectOrRef>,
+            content: Option<MediaTypeObjectMap>,
+        }
+
+        let object = ParameterObjectReadHelper::deserialize(deserializer)?;
+
+        let schema_or_content = match (object.schema, object.content) {
+            (Some(schema), None) => {
+                ParameterObjectContentOrSchema::Schema(schema)
+            }
+            (None, Some(content)) => {
+                ParameterObjectContentOrSchema::Content(content)
+            }
+            _ => {
+                return Err(serde::de::Error::custom("expected either schema or content"))
+            }
+        };
+
+        Ok(ParameterObject {
+            name: object.name,
+            r#in: object.r#in,
+            description: object.description,
+            required: object.required,
+            deprecated: object.deprecated,
+            schema_or_content
+        })
+    }
 }
 
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#parameter-locations>

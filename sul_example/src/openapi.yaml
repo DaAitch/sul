@@ -24,6 +24,9 @@ paths:
         - name: id
           in: path
           required: true
+          schema:
+            type: integer
+            format: int32
     put:
       operationId: replaceUser
       summary: Replaces a user by id.
@@ -52,6 +55,9 @@ paths:
         - name: id
           in: path
           required: true
+          schema:
+            type: integer
+            format: int32
   /users:
     get:
       summary: Returns all users.
@@ -99,10 +105,6 @@ paths:
                   type: string
                 lastName:
                   type: string
-      parameters:
-        - name: id
-          in: path
-          required: true
   /profiles:
     $ref: "#/components/pathItems/profiles"
 components:
