@@ -90,11 +90,10 @@ There are a lot of missing features which are easy to implement, but the current
   - [ ] other formats
 - Schema Types
   - [x] String
-  - [ ] Integer
-  - [ ] Number
+  - [x] Integer: int32, int64
+  - [x] Number: float, double
   - [x] Array
   - [x] Object
-  - [ ] other types
   - [x] $ref Schema Object
 - Components
   - [x] Path Items

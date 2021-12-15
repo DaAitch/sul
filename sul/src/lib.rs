@@ -5,7 +5,10 @@ use naming::{
     get_prop_id, get_request_body_type_id, get_request_type_id, get_schema_array_subtype_id,
     get_schema_prop_type_id,
 };
-use openapi::{Document, OperationObject, ResponseObject, SchemaObject};
+use openapi::{
+    DataTypeIntegerFormat, DataTypeNumberFormat, Document, OperationObject, ResponseObject,
+    SchemaObject,
+};
 use path::Route;
 use proc_macro::{Span, TokenStream};
 use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
@@ -256,9 +259,29 @@ fn expand_schema_source(
                 }
             });
         }
-        SchemaObject::String => {
+        SchemaObject::String(_) => {
             ctx.user_mod_sources.push(quote! {
                 type #type_id = String;
+            });
+        }
+        SchemaObject::Integer(DataTypeIntegerFormat::Int32) => {
+            ctx.user_mod_sources.push(quote! {
+                type #type_id = i32;
+            });
+        }
+        SchemaObject::Integer(DataTypeIntegerFormat::Int64) => {
+            ctx.user_mod_sources.push(quote! {
+                type #type_id = i64;
+            });
+        }
+        SchemaObject::Number(DataTypeNumberFormat::Float) => {
+            ctx.user_mod_sources.push(quote! {
+                type #type_id = f32;
+            });
+        }
+        SchemaObject::Number(DataTypeNumberFormat::Double) => {
+            ctx.user_mod_sources.push(quote! {
+                type #type_id = f64;
             });
         }
     }

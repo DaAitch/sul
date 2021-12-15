@@ -285,79 +285,41 @@ pub struct MediaTypeObjectJson {
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#schema-object>
 #[derive(Debug)]
 pub enum SchemaObject {
+    String(DataTypeStringFormat),
+    Integer(DataTypeIntegerFormat),
+    Number(DataTypeNumberFormat),
     Array(Box<SchemaObject>),
     Object(Box<HashMap<String, SchemaObject>>),
-    String,
+}
+
+#[derive(Debug)]
+pub enum DataTypeStringFormat {
+    None,
+    Password,
+}
+
+#[derive(Debug)]
+pub enum DataTypeIntegerFormat {
+    Int32,
+    Int64,
+}
+
+#[derive(Debug)]
+pub enum DataTypeNumberFormat {
+    Float,
+    Double,
 }
 
 impl<'de> Deserialize<'de> for SchemaObject {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct V;
+        let object_or_ref = SchemaObjectOrRef::deserialize(deserializer)?;
 
-        impl<'de> Visitor<'de> for V {
-            type Value = SchemaObject;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("schema")
-            }
-
-            fn visit_map<A: MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> std::result::Result<Self::Value, A::Error> {
-                #[derive(Deserialize, Debug)]
-                #[serde(field_identifier, rename_all = "camelCase")]
-                enum Schema {
-                    Type,
-                    Items,
-                    Properties,
-                }
-
-                #[derive(Deserialize, Debug)]
-                #[serde(field_identifier, rename_all = "camelCase")]
-                enum Type {
-                    Array,
-                    String,
-                    Object,
-                }
-
-                let mut ty: Option<Type> = None;
-                let mut items: Option<SchemaObject> = None;
-                let mut properties: Option<HashMap<String, SchemaObject>> = None;
-
-                loop {
-                    match map.next_key()? {
-                        Some(Schema::Type) => {
-                            ty = Some(map.next_value()?);
-                        }
-                        Some(Schema::Items) => {
-                            items = Some(map.next_value()?);
-                        }
-                        Some(Schema::Properties) => {
-                            properties = Some(map.next_value()?);
-                        }
-                        None => {
-                            break;
-                        }
-                    }
-                }
-
-                match ty {
-                    None => Err(serde::de::Error::missing_field("type")),
-                    Some(Type::Array) => match items {
-                        None => Err(serde::de::Error::missing_field("items")),
-                        Some(items) => Ok(SchemaObject::Array(Box::new(items))),
-                    },
-                    Some(Type::Object) => match properties {
-                        None => Err(serde::de::Error::missing_field("properties")),
-                        Some(properties) => Ok(SchemaObject::Object(Box::new(properties))),
-                    },
-                    Some(Type::String) => Ok(SchemaObject::String),
-                }
-            }
+        match object_or_ref {
+            SchemaObjectOrRef::Object(object) => Ok(object),
+            SchemaObjectOrRef::Ref(_) => Err(serde::de::Error::custom(
+                "unexpected $ref, expecting Schema Object",
+            )),
         }
-
-        deserializer.deserialize_map(V)
     }
 }
 
@@ -416,7 +378,6 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
             type Value = SchemaObjectOrRef;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                // TODO(daaitch): expecting message
                 write!(formatter, "Schema Object or $ref")
             }
 
@@ -429,20 +390,36 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
                     Type,
                     Items,
                     Properties,
+                    Format,
                 }
 
                 #[derive(Deserialize, Debug)]
                 #[serde(field_identifier, rename_all = "camelCase")]
                 enum Type {
-                    Array,
                     String,
+                    Integer,
+                    Number,
+                    Array,
                     Object,
+                }
+
+                #[derive(Deserialize, Debug)]
+                #[serde(field_identifier, rename_all = "camelCase")]
+                enum DataTypeFormat {
+                    #[serde(skip)]
+                    None,
+                    Password,
+                    Int32,
+                    Int64,
+                    Float,
+                    Double,
                 }
 
                 let mut r: Option<SchemaObjectRef> = None;
                 let mut ty: Option<Type> = None;
                 let mut items: Option<SchemaObject> = None;
                 let mut properties: Option<HashMap<String, SchemaObject>> = None;
+                let mut format = DataTypeFormat::None;
 
                 while let Some(key) = map.next_key::<Schema>()? {
                     match key {
@@ -458,21 +435,57 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
                         Schema::Ref => {
                             r = Some(map.next_value()?);
                         }
+                        Schema::Format => {
+                            format = map.next_value()?;
+                        }
                     }
                 }
 
                 match r {
-                    Some(r) => {
-                        match (ty, items, properties) {
-                            (None, None, None) => Ok(SchemaObjectOrRef::Ref(r)),
-                            _ => {
-                                // TODO(daaitch): better error message
-                                Err(serde::de::Error::custom("given $ref, doesn't expecting other fields"))
-                            }
-                        }
-                    }
+                    Some(r) => match (ty, items, properties) {
+                        (None, None, None) => Ok(SchemaObjectOrRef::Ref(r)),
+                        _ => Err(serde::de::Error::custom(
+                            "given $ref, doesn't expecting other fields",
+                        )),
+                    },
                     None => match ty {
                         None => Err(serde::de::Error::missing_field("type")),
+                        Some(Type::String) => match format {
+                            DataTypeFormat::None => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::String(DataTypeStringFormat::None),
+                            )),
+                            DataTypeFormat::Password => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::String(DataTypeStringFormat::Password),
+                            )),
+                            invalid_format => Err(serde::de::Error::custom(format!(
+                                "unexpected format = {:?} for type string",
+                                invalid_format
+                            ))),
+                        },
+                        Some(Type::Integer) => match format {
+                            DataTypeFormat::Int32 => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::Integer(DataTypeIntegerFormat::Int32),
+                            )),
+                            DataTypeFormat::Int64 => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::Integer(DataTypeIntegerFormat::Int64),
+                            )),
+                            invalid_format => Err(serde::de::Error::custom(format!(
+                                "unexpected format = {:?} for type integer",
+                                invalid_format
+                            ))),
+                        },
+                        Some(Type::Number) => match format {
+                            DataTypeFormat::Float => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::Number(DataTypeNumberFormat::Float),
+                            )),
+                            DataTypeFormat::Double => Ok(SchemaObjectOrRef::Object(
+                                SchemaObject::Number(DataTypeNumberFormat::Double),
+                            )),
+                            invalid_format => Err(serde::de::Error::custom(format!(
+                                "unexpected format = {:?} for type integer",
+                                invalid_format
+                            ))),
+                        },
                         Some(Type::Array) => match items {
                             None => Err(serde::de::Error::missing_field("items")),
                             Some(items) => Ok(SchemaObjectOrRef::Object(SchemaObject::Array(
@@ -485,7 +498,6 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
                                 SchemaObject::Object(Box::new(properties)),
                             )),
                         },
-                        Some(Type::String) => Ok(SchemaObjectOrRef::Object(SchemaObject::String)),
                     },
                 }
             }
