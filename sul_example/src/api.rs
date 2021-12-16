@@ -30,7 +30,8 @@ impl ApiController {
             .unwrap_or(Duration::ZERO);
 
         if d.as_secs() % 2 == 0 {
-            GetUsersResponse::ok(&self.context.users)
+            let u: &UserGet = &self.context.users;
+            GetUsersResponse::ok(u)
         } else {
             GetUsersResponse::unauthorized(&GetUsersUnauthorized {
                 error_code: "AUTH123".to_owned(),

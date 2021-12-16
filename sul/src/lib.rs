@@ -2,12 +2,12 @@
 
 use hyper::Method;
 use naming::{
-    get_prop_id, get_request_body_type_id, get_request_type_id, get_schema_array_subtype_id,
-    get_schema_prop_type_id,
+    get_components_name_id, get_prop_id, get_request_body_type_id, get_request_type_id,
+    get_schema_array_subtype_id, get_schema_object_ref_type_id, get_schema_prop_type_id,
 };
 use openapi::{
     DataTypeIntegerFormat, DataTypeNumberFormat, Document, OperationObject, ResponseObject,
-    SchemaObject,
+    SchemaObject, SchemaObjectOrRef,
 };
 use path::Route;
 use proc_macro::{Span, TokenStream};
@@ -29,16 +29,14 @@ mod path;
 const APISERVICE_CALL_PATH_ID: &str = "path";
 const APISERVICE_CALL_METHOD_ID: &str = "method";
 
-struct OpenAPIExpansionContext<'a> {
-    document: &'a Document,
+struct OpenAPIExpansionContext {
     user_mod_sources: Vec<TokenStream2>,
     service_mod_sources: Vec<TokenStream2>,
 }
 
-impl<'a> OpenAPIExpansionContext<'a> {
-    fn new(document: &'a Document) -> Self {
+impl OpenAPIExpansionContext {
+    fn new() -> Self {
         Self {
-            document,
             user_mod_sources: Vec::new(),
             service_mod_sources: Vec::new(),
         }
@@ -62,7 +60,7 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
         openapi::Document::from_file(yaml_file_path).unwrap()
     };
 
-    let mut ctx = OpenAPIExpansionContext::new(&document);
+    let mut ctx = OpenAPIExpansionContext::new();
     let mut routes = Vec::new();
 
     for (path, item) in &document.paths {
@@ -96,6 +94,7 @@ pub fn openapi(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let controller_id = &controller_struct.ident;
     expand_service(&mut ctx, controller_id, route_matcher_source);
+    expand_schema_components(&mut ctx, &document);
 
     {
         let user_mod_sources = &ctx.user_mod_sources;
@@ -151,11 +150,7 @@ fn expand_response_source(
 
     for (status_code, response) in &operation.responses {
         let type_id = get_response_builder_param_type_id(&operation, method, &path, status_code);
-        let schema = ctx
-            .document
-            .get_schema_ref(&response.content.application_json.schema)
-            .expect("TODO");
-        expand_schema_source(ctx, &type_id, schema);
+        expand_schema_source(ctx, &type_id, &response.content.application_json.schema);
 
         let status_code_name_id = id(get_status_name_lc(status_code));
 
@@ -210,15 +205,15 @@ fn expand_request_body_source(
 
     match &operation.request_body {
         Some(request_body) => {
-            let schema = ctx
-                .document
-                .get_schema_ref(&request_body.content.application_json.schema)
-                .expect("TODO");
-            expand_schema_source(ctx, &request_body_type_id, schema);
+            expand_schema_source(
+                ctx,
+                &request_body_type_id,
+                &request_body.content.application_json.schema,
+            );
         }
         None => {
             ctx.user_mod_sources.push(quote! {
-                #[derive(serde::Serialize, serde::Deserialize, Debug)]
+                #[derive(serde::Deserialize, Debug)]
                 pub struct #request_body_type_id {}
             });
         }
@@ -229,61 +224,84 @@ fn expand_request_body_source(
 fn expand_schema_source(
     ctx: &mut OpenAPIExpansionContext,
     type_id: &syn::Ident,
-    schema: &SchemaObject,
+    schema_or_ref: &SchemaObjectOrRef,
 ) {
-    match schema {
-        SchemaObject::Array(items_schema) => {
-            let sub_type_id = get_schema_array_subtype_id(type_id);
-            expand_schema_source(ctx, &sub_type_id, items_schema);
+    match schema_or_ref {
+        SchemaObjectOrRef::Ref(r) => {
+            let ref_type_id = get_schema_object_ref_type_id(r);
             ctx.user_mod_sources.push(quote! {
-                type #type_id = std::vec::Vec<#sub_type_id>;
-            });
+                type #type_id = #ref_type_id;
+            })
         }
-        SchemaObject::Object(props_schema) => {
-            let mut struct_prop_sources = Vec::new();
-            for (prop_name, prop_schema) in props_schema.deref() {
-                let name = get_schema_prop_type_id(type_id, prop_name);
-                expand_schema_source(ctx, &name, prop_schema);
-                let prop_id = get_prop_id(prop_name);
-
-                struct_prop_sources.push(quote! {
-                    #[serde(rename = #prop_name)]
-                    #prop_id: #name
+        SchemaObjectOrRef::Object(object) => match object {
+            SchemaObject::Array(items_schema) => {
+                let sub_type_id = get_schema_array_subtype_id(type_id);
+                expand_schema_source(ctx, &sub_type_id, items_schema);
+                ctx.user_mod_sources.push(quote! {
+                    type #type_id = std::vec::Vec<#sub_type_id>;
                 });
             }
+            SchemaObject::Object(props_schema) => {
+                let mut struct_prop_sources = Vec::new();
+                for (prop_name, prop_schema) in props_schema.deref() {
+                    let name = get_schema_prop_type_id(type_id, prop_name);
+                    expand_schema_source(ctx, &name, prop_schema);
+                    let prop_id = get_prop_id(prop_name);
 
-            ctx.user_mod_sources.push(quote! {
-                #[derive(serde::Serialize, serde::Deserialize, Debug)]
-                pub struct #type_id {
-                    #(#struct_prop_sources), *
+                    struct_prop_sources.push(quote! {
+                        #[serde(rename = #prop_name)]
+                        #prop_id: #name
+                    });
                 }
-            });
-        }
-        SchemaObject::String(_) => {
-            ctx.user_mod_sources.push(quote! {
-                type #type_id = String;
-            });
-        }
-        SchemaObject::Integer(DataTypeIntegerFormat::Int32) => {
-            ctx.user_mod_sources.push(quote! {
-                type #type_id = i32;
-            });
-        }
-        SchemaObject::Integer(DataTypeIntegerFormat::Int64) => {
-            ctx.user_mod_sources.push(quote! {
-                type #type_id = i64;
-            });
-        }
-        SchemaObject::Number(DataTypeNumberFormat::Float) => {
-            ctx.user_mod_sources.push(quote! {
-                type #type_id = f32;
-            });
-        }
-        SchemaObject::Number(DataTypeNumberFormat::Double) => {
-            ctx.user_mod_sources.push(quote! {
-                type #type_id = f64;
-            });
-        }
+
+                ctx.user_mod_sources.push(quote! {
+                    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+                    pub struct #type_id {
+                        #(#struct_prop_sources), *
+                    }
+                });
+            }
+            SchemaObject::String(_) => {
+                ctx.user_mod_sources.push(quote! {
+                    type #type_id = String;
+                });
+            }
+            SchemaObject::Integer(DataTypeIntegerFormat::Int32) => {
+                ctx.user_mod_sources.push(quote! {
+                    type #type_id = i32;
+                });
+            }
+            SchemaObject::Integer(DataTypeIntegerFormat::Int64) => {
+                ctx.user_mod_sources.push(quote! {
+                    type #type_id = i64;
+                });
+            }
+            SchemaObject::Number(DataTypeNumberFormat::Float) => {
+                ctx.user_mod_sources.push(quote! {
+                    type #type_id = f32;
+                });
+            }
+            SchemaObject::Number(DataTypeNumberFormat::Double) => {
+                ctx.user_mod_sources.push(quote! {
+                    type #type_id = f64;
+                });
+            }
+        },
+    }
+}
+
+fn expand_schema_components(ctx: &mut OpenAPIExpansionContext, document: &Document) {
+    match &document.components {
+        Some(components) => match &components.schemas {
+            Some(schemas) => {
+                for (key, schema_or_ref) in schemas {
+                    let id = get_components_name_id(key);
+                    expand_schema_source(ctx, &id, schema_or_ref);
+                }
+            }
+            None => {}
+        },
+        None => {}
     }
 }
 

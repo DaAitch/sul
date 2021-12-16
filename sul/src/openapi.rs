@@ -46,22 +46,6 @@ impl Document {
             }
         }
     }
-
-    pub fn get_schema_ref<'a>(
-        &'a self,
-        object_or_ref: &'a SchemaObjectOrRef,
-    ) -> Result<&'a SchemaObject, ()> {
-        match object_or_ref {
-            SchemaObjectOrRef::Object(object) => Ok(object),
-            SchemaObjectOrRef::Ref(r) => {
-                let components = self.components.as_ref().ok_or(())?;
-                let schemas = components.schemas.as_ref().ok_or(())?;
-                let schema = schemas.get(&r.name).ok_or(())?;
-
-                self.get_schema_ref(schema) // recursion
-            }
-        }
-    }
 }
 
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#info-object>
@@ -288,19 +272,8 @@ pub enum SchemaObject {
     String(DataTypeStringFormat),
     Integer(DataTypeIntegerFormat),
     Number(DataTypeNumberFormat),
-    Array(Box<SchemaObject>),
-    Object(Box<HashMap<String, SchemaObject>>),
-}
-
-impl SchemaObject {
-    fn is_scalar(&self) -> bool {
-        match self {
-            &SchemaObject::String(_) => true,
-            &SchemaObject::Integer(_) => true,
-            &SchemaObject::Number(_) => true,
-            _ => false
-        }
-    }
+    Array(Box<SchemaObjectOrRef>),
+    Object(Box<HashMap<String, SchemaObjectOrRef>>),
 }
 
 #[derive(Debug)]
@@ -336,7 +309,7 @@ impl<'de> Deserialize<'de> for SchemaObject {
 
 #[derive(Debug)]
 pub struct SchemaObjectRef {
-    name: String,
+    pub name: String,
 }
 
 // TODO(daaitch): duplicated code, see PathItemObjectRef
@@ -428,8 +401,8 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
 
                 let mut r: Option<SchemaObjectRef> = None;
                 let mut ty: Option<Type> = None;
-                let mut items: Option<SchemaObject> = None;
-                let mut properties: Option<HashMap<String, SchemaObject>> = None;
+                let mut items: Option<SchemaObjectOrRef> = None;
+                let mut properties: Option<HashMap<String, SchemaObjectOrRef>> = None;
                 let mut format = DataTypeFormat::None;
 
                 while let Some(key) = map.next_key::<Schema>()? {
@@ -524,21 +497,6 @@ pub enum ParameterObjectContentOrSchema {
     Schema(SchemaObjectOrRef),
 }
 
-impl ParameterObjectContentOrSchema {
-    pub fn get_schema<'a>(&'a self, document: &'a Document) -> Result<&'a SchemaObject, ()> {
-        let schema_or_ref = match self {
-            ParameterObjectContentOrSchema::Schema(schema) => {
-                schema
-            },
-            ParameterObjectContentOrSchema::Content(content) => {
-                &content.application_json.schema
-            },
-        };
-
-        document.get_schema_ref(schema_or_ref)
-    }
-}
-
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#parameter-object>
 #[derive(Debug)]
 pub struct ParameterObject {
@@ -566,14 +524,12 @@ impl<'de> Deserialize<'de> for ParameterObject {
         let object = ParameterObjectReadHelper::deserialize(deserializer)?;
 
         let schema_or_content = match (object.schema, object.content) {
-            (Some(schema), None) => {
-                ParameterObjectContentOrSchema::Schema(schema)
-            }
-            (None, Some(content)) => {
-                ParameterObjectContentOrSchema::Content(content)
-            }
+            (Some(schema), None) => ParameterObjectContentOrSchema::Schema(schema),
+            (None, Some(content)) => ParameterObjectContentOrSchema::Content(content),
             _ => {
-                return Err(serde::de::Error::custom("expected either schema or content"))
+                return Err(serde::de::Error::custom(
+                    "expected either schema or content",
+                ))
             }
         };
 
@@ -583,7 +539,7 @@ impl<'de> Deserialize<'de> for ParameterObject {
             description: object.description,
             required: object.required,
             deprecated: object.deprecated,
-            schema_or_content
+            schema_or_content,
         })
     }
 }

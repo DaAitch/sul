@@ -1,4 +1,8 @@
-use crate::{get_status_name_lc, id, openapi::OperationObject, snake_case, upper_camel_case};
+use crate::{
+    get_status_name_lc, id,
+    openapi::{OperationObject, SchemaObjectRef},
+    snake_case, upper_camel_case,
+};
 use quote::format_ident;
 
 pub fn get_request_type_id(
@@ -98,4 +102,13 @@ pub fn get_request_body_type_id(request_type_id: &syn::Ident) -> syn::Ident {
 
 pub fn get_schema_array_subtype_id(parent_prop_type_id: &syn::Ident) -> syn::Ident {
     format_ident!("{}{}", parent_prop_type_id, "Item")
+}
+
+pub fn get_schema_object_ref_type_id(r: &SchemaObjectRef) -> syn::Ident {
+    // TODO(daaitch): deny-list ? name collision
+    format_ident!("{}", r.name)
+}
+
+pub fn get_components_name_id(name: impl AsRef<str>) -> syn::Ident {
+    format_ident!("{}", upper_camel_case(name.as_ref()))
 }
