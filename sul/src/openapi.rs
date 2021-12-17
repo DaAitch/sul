@@ -76,6 +76,52 @@ pub struct PathItemObject {
     pub trace: Option<OperationObject>,
 }
 
+impl PathItemObject {
+    pub fn operations<'a>(&'a self) -> PathItemObjectMethodIter<'a> {
+        PathItemObjectMethodIter::new(self)
+    }
+}
+
+pub struct PathItemObjectMethodIter<'a> {
+    object: &'a PathItemObject,
+    next_item: u8,
+}
+
+impl<'a> PathItemObjectMethodIter<'a> {
+    fn new(object: &'a PathItemObject) -> Self {
+        Self {
+            object,
+            next_item: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for PathItemObjectMethodIter<'a> {
+    type Item = (Method, &'a OperationObject);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let item = match self.next_item {
+                0 => self.object.get.as_ref().map(|op| (Method::GET, op)),
+                1 => self.object.put.as_ref().map(|op| (Method::PUT, op)),
+                2 => self.object.post.as_ref().map(|op| (Method::POST, op)),
+                3 => self.object.delete.as_ref().map(|op| (Method::DELETE, op)),
+                4 => self.object.options.as_ref().map(|op| (Method::OPTIONS, op)),
+                5 => self.object.head.as_ref().map(|op| (Method::HEAD, op)),
+                6 => self.object.patch.as_ref().map(|op| (Method::PATCH, op)),
+                7 => self.object.trace.as_ref().map(|op| (Method::TRACE, op)),
+                _ => return None,
+            };
+
+            self.next_item += 1;
+
+            if let Some(item) = item {
+                return Some(item);
+            }
+        }
+    }
+}
+
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#path-item-object>
 #[derive(Debug)]
 pub struct PathItemObjectRef {
@@ -205,6 +251,7 @@ pub struct OperationObject {
     pub operation_id: Option<String>,
     pub summary: Option<String>,
     pub description: Option<String>,
+    // TODO(daaitch): key should be a StatusCode Object
     pub responses: HashMap<String, ResponseObject>, // response or ref-object
     pub parameters: Option<Vec<ParameterObject>>,
     pub request_body: Option<RequestBodyObject>,
