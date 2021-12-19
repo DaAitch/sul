@@ -21,7 +21,7 @@ impl ApiController {
     }
 
     pub async fn get_users_id(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
-        GetUsersIdResponse::ok(&format!("parameter is {}", request.parameters.id))
+        GetUsersIdResponse::ok(format!("parameter is {}", request.parameters.id)).await
     }
 
     pub async fn get_users(self, _: GetUsersRequest) -> GetUsersResponse {
@@ -31,35 +31,38 @@ impl ApiController {
 
         if d.as_secs() % 2 == 0 {
             let u: &UserGet = &self.context.users;
-            GetUsersResponse::ok(u)
+            GetUsersResponse::ok(u.clone()).await
         } else {
-            GetUsersResponse::unauthorized(&GetUsersUnauthorized {
+            GetUsersResponse::unauthorized(GetUsersUnauthorized {
                 error_code: "AUTH123".to_owned(),
                 error_message: "auth error".to_owned(),
             })
+            .await
         }
     }
 
     pub async fn replace_user(self, request: ReplaceUserRequest) -> ReplaceUserResponse {
         let name = request.body.name;
 
-        ReplaceUserResponse::ok(&ReplaceUserOk {
+        ReplaceUserResponse::ok(ReplaceUserOk {
             new_revision: format!("4321_for_{}", name),
             old_revision: "1234".to_owned(),
         })
+        .await
     }
 
     pub async fn get_profiles(self, _: GetProfilesRequest) -> GetProfilesResponse {
-        GetProfilesResponse::ok(&vec![GetProfilesOkItem {
+        GetProfilesResponse::ok(vec![GetProfilesOkItem {
             id: "1".to_owned(),
             user: GetProfilesOkItemUser {
                 first_name: "Robert".to_owned(),
                 last_name: "Rust".to_owned(),
             },
         }])
+        .await
     }
 
     pub async fn add_user(self, _: AddUserRequest) -> AddUserResponse {
-        AddUserResponse::ok(&AddUserOk { id: 4 })
+        AddUserResponse::ok(AddUserOk { id: 4 }).await
     }
 }

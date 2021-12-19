@@ -760,6 +760,10 @@ impl StatusCode {
             None => format!("Unknown {}", self.status.as_u16()),
         }
     }
+
+    pub fn code(&self) -> u16 {
+        self.status.as_u16()
+    }
 }
 
 impl fmt::Display for StatusCode {

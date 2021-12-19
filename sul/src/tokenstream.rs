@@ -205,17 +205,33 @@ impl OpenAPITokenStream {
 
             let fn_name_id = naming::get_status_code_response_fn_name_id(status_code);
             let fn_doc_source = expand_method_doc(&method, path, status_code, response);
+            let code = status_code.code();
 
             impl_sources.push(quote! {
                 #fn_doc_source
-                pub fn #fn_name_id(data: &#type_id) -> #struct_id {
-                    let content = serde_json::to_string(data).unwrap();
-                    let body = hyper::Body::from(content);
+                pub async fn #fn_name_id(data: #type_id) -> #struct_id {
+                    let result = tokio::task::spawn_blocking(move || {
+                        let data = data;
+                        serde_json::to_string(&data).unwrap()
+                    }).await;
+
+                    let response = match result {
+                        Ok(content) => {
+                            hyper::Response::builder()
+                                .status(#code)
+                                .body(hyper::Body::from(content))
+                                .unwrap()
+                        },
+                        Err(err) => {
+                            hyper::Response::builder()
+                                .status(500)
+                                .body(hyper::Body::from("tokio spawn failed"))
+                                .unwrap()
+                        }
+                    };
 
                     #struct_id {
-                        response: hyper::Response::builder()
-                            .body(body)
-                            .unwrap()
+                        response
                     }
                 }
             })
@@ -262,8 +278,7 @@ impl OpenAPITokenStream {
             }
             None => {
                 self.user_mod_sources.push(quote! {
-                    #[derive(serde::Deserialize, Debug)]
-                    pub struct #request_body_type_id {}
+                    pub type #request_body_type_id = ();
                 });
             }
         }
@@ -484,14 +499,10 @@ impl OpenAPITokenStream {
                 let operation_id = route.get_operation_id();
                 let response_type_id = route.get_response_type_id();
 
-                Some(quote! {
-                    None => {
-                        let controller = (self.make_controller)();
-                        let parameters = super::#parameters_type_id {
-                            #(#initializer), *
-                        };
-
-                        async move {
+                let future_source = match route.operation.request_body {
+                    // when we need to deserialize a request body
+                    Some(_) => {
+                        quote! {
                             let body = hyper::body::to_bytes(request).await.unwrap(); // TODO: error handling
                             let body = serde_json::from_slice::<super::#body_type_id>(body.as_ref());
                             match body {
@@ -512,6 +523,31 @@ impl OpenAPITokenStream {
                                         .unwrap()
                                 }
                             }
+                        }
+                    }
+                    // When we don't need to deserialize a request body.
+                    // That is because deserializing a union `()` wants a JSON `null` value.
+                    // An empty payload is not a valid JSON.
+                    None => quote! {
+                        let response: super::#response_type_id = controller.#operation_id ( super:: #type_id {
+                            parameters,
+                            body: (),
+                        }).await;
+
+                        let response: hyper::Response<hyper::Body> = response.into();
+                        response
+                    },
+                };
+
+                Some(quote! {
+                    None => {
+                        let controller = (self.make_controller)();
+                        let parameters = super::#parameters_type_id {
+                            #(#initializer), *
+                        };
+
+                        async move {
+                            #future_source
                         }.boxed()
                     }
                 })
