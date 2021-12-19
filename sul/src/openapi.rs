@@ -352,7 +352,7 @@ pub struct OperationObject {
 impl OperationObject {
     pub fn check_path_parameters<'a>(
         &self,
-        parameters: impl IntoIterator<Item = &'a String>,
+        parameters: impl IntoIterator<Item = &'a Ident>,
         method: &Method,
         path: &PathItemKey,
     ) -> std::result::Result<(), String> {
@@ -366,7 +366,7 @@ impl OperationObject {
 
             match parameters
                 .into_iter()
-                .find(|p| &p.name == parameter && p.r#in == ParameterLocation::Path)
+                .find(|p| parameter == &p.name && p.r#in == ParameterLocation::Path)
             {
                 Some(param) => {
                     if param.required != Some(true) {

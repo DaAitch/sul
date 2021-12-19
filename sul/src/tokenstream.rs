@@ -1,11 +1,9 @@
-use crate::{
-    naming::{self, get_parameter_name_id},
-    openapi as oa,
-};
+use crate::{naming, openapi as oa};
 use proc_macro2::TokenStream;
+use proc_macro2::{Ident, Span};
 use quote::quote;
 use std::{cmp::Ordering, collections::HashMap, ops::Deref};
-use syn::{Ident, ItemStruct};
+use syn::ItemStruct;
 
 const PATH_SEPARATOR: char = '/';
 
@@ -428,7 +426,7 @@ impl OpenAPITokenStream {
         }
     }
 
-    fn expand_node_matcher(&mut self, node: &PathNode, parameters: &Vec<String>) -> TokenStream {
+    fn expand_node_matcher(&mut self, node: &PathNode, parameters: &Vec<Ident>) -> TokenStream {
         let mut keys: Vec<&PathNodeType> = node.children.keys().collect();
         keys.sort();
 
@@ -438,14 +436,13 @@ impl OpenAPITokenStream {
 
             match key {
                 &PathNodeType::Template => {
-                    let parameter_name = node
-                        .parameter_name
+                    let parameter_id = node
+                        .parameter_id
                         .as_ref()
                         .expect("parameter items should always have parameter name set");
-                    let parameter_id = get_parameter_name_id(parameter_name);
 
                     let mut parameters = parameters.clone();
-                    parameters.push(parameter_name.clone());
+                    parameters.push(parameter_id.clone());
                     let arm_source = self.expand_node_matcher(node, &parameters);
 
                     match_token_arm_sources.push(quote! {
@@ -479,7 +476,7 @@ impl OpenAPITokenStream {
                 let body_type_id = route.get_request_body_type_id();
 
                 {
-                    let fields = parameters.iter().map(naming::get_parameter_id).map(|p| {
+                    let fields = parameters.iter().map(|p| {
                         quote! {
                             pub #p: String
                         }
@@ -497,7 +494,7 @@ impl OpenAPITokenStream {
                     });
                 }
 
-                let initializer = parameters.iter().map(naming::get_parameter_id).map(|p| {
+                let initializer = parameters.iter().map(|p| {
                     quote! {
                         #p: #p.to_owned()
                     }
@@ -645,7 +642,7 @@ impl<'a> Route<'a> {
 }
 
 struct PathNode<'a> {
-    parameter_name: Option<String>,
+    parameter_id: Option<Ident>,
     route: Option<&'a Route<'a>>,
     children: HashMap<PathNodeType, PathNode<'a>>,
 }
@@ -658,11 +655,11 @@ impl<'a> PathNode<'a> {
             let (key, parameter_name) = get_node_type(token);
 
             let child = node.children.entry(key).or_insert_with(|| PathNode {
-                parameter_name: parameter_name.clone(),
+                parameter_id: parameter_name.clone(),
                 ..Default::default()
             });
 
-            assert_eq!(child.parameter_name, parameter_name);
+            assert_eq!(child.parameter_id, parameter_name);
             node = child;
         }
 
@@ -673,7 +670,7 @@ impl<'a> PathNode<'a> {
 impl<'a> Default for PathNode<'a> {
     fn default() -> Self {
         PathNode {
-            parameter_name: None,
+            parameter_id: None,
             route: None,
             children: Default::default(),
         }
@@ -681,7 +678,7 @@ impl<'a> Default for PathNode<'a> {
 }
 
 /// returns (type, parameter name)
-fn get_node_type(path_token: impl AsRef<str>) -> (PathNodeType, Option<String>) {
+fn get_node_type(path_token: impl AsRef<str>) -> (PathNodeType, Option<Ident>) {
     const TEMPLATE_START: char = '{';
     const TEMPLATE_END: char = '}';
 
@@ -689,7 +686,10 @@ fn get_node_type(path_token: impl AsRef<str>) -> (PathNodeType, Option<String>) 
     if path_token.starts_with(TEMPLATE_START) && path_token.ends_with(TEMPLATE_END) {
         (
             PathNodeType::Template,
-            Some(path_token[1..path_token.len() - 1].to_owned()),
+            Some(Ident::new(
+                &path_token[1..path_token.len() - 1],
+                Span::call_site(),
+            )),
         )
     } else {
         (PathNodeType::Path(path_token.to_string()), None)

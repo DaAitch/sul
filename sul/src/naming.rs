@@ -34,10 +34,6 @@ pub fn get_request_type_id(
     format_ident!("{}Request", prefix)
 }
 
-pub fn get_parameter_id(parameter_name: impl AsRef<str>) -> syn::Ident {
-    id(snake_case(parameter_name.as_ref()))
-}
-
 pub fn get_parameter_type_id(
     operation: &oa::OperationObject,
     method: impl AsRef<str>,
@@ -95,10 +91,6 @@ pub fn get_components_name_id(name: impl AsRef<str>) -> syn::Ident {
 
 pub fn get_method_enum_value(method: &hyper::Method) -> Ident {
     id(method)
-}
-
-pub fn get_parameter_name_id(name: impl AsRef<str>) -> Ident {
-    id(name)
 }
 
 // basic helper
