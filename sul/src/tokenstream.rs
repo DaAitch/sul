@@ -327,6 +327,11 @@ impl OpenAPITokenStream {
                         type #type_id = String;
                     });
                 }
+                oa::SchemaObject::Boolean => {
+                    self.user_mod_sources.push(quote! {
+                        type #type_id = bool;
+                    });
+                }
                 oa::SchemaObject::Integer(oa::DataTypeIntegerFormat::Int32) => {
                     self.user_mod_sources.push(quote! {
                         type #type_id = i32;

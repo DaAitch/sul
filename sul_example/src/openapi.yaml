@@ -76,6 +76,8 @@ paths:
               schema:
                 type: object
                 properties:
+                  recoverable:
+                    type: boolean
                   errorCode:
                     type: string
                   errorMessage:

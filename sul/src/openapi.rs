@@ -492,6 +492,7 @@ pub enum SchemaObject {
     String(DataTypeStringFormat),
     Integer(DataTypeIntegerFormat),
     Number(DataTypeNumberFormat),
+    Boolean,
     Array(Box<SchemaObjectOrRef>),
     Object(Box<HashMap<String, SchemaObjectOrRef>>),
 }
@@ -603,6 +604,7 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
                     String,
                     Integer,
                     Number,
+                    Boolean,
                     Array,
                     Object,
                 }
@@ -690,6 +692,7 @@ impl<'de> Deserialize<'de> for SchemaObjectOrRef {
                                 invalid_format
                             ))),
                         },
+                        Some(Type::Boolean) => Ok(SchemaObjectOrRef::Object(SchemaObject::Boolean)),
                         Some(Type::Array) => match items {
                             None => Err(serde::de::Error::missing_field("items")),
                             Some(items) => Ok(SchemaObjectOrRef::Object(SchemaObject::Array(

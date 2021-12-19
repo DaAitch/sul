@@ -34,6 +34,7 @@ impl ApiController {
             GetUsersResponse::ok(u.clone()).await
         } else {
             GetUsersResponse::unauthorized(GetUsersUnauthorized {
+                recoverable: false,
                 error_code: "AUTH123".to_owned(),
                 error_message: "auth error".to_owned(),
             })
