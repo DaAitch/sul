@@ -1,11 +1,15 @@
 //! <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md>
 
 use hyper::Method;
+use proc_macro2::Ident;
+use quote::format_ident;
 use serde::{
     de::{MapAccess, Visitor},
     Deserialize, Deserializer,
 };
 use std::{collections::HashMap, fmt, path::Path};
+
+use crate::util::{snake_case, upper_camel_case};
 
 #[derive(Debug)]
 pub enum ReadFileError {
@@ -20,7 +24,7 @@ pub struct Document {
     pub info: InfoObject,
     pub servers: Vec<ServerObject>,
     // TODO(daaitch): make optional
-    pub paths: HashMap<String, PathItemObjectOrRef>,
+    pub paths: HashMap<PathItemKey, PathItemObjectOrRef>,
     pub components: Option<ComponentsObject>,
 }
 
@@ -40,11 +44,92 @@ impl Document {
             PathItemObjectOrRef::Ref(r) => {
                 let components = self.components.as_ref().ok_or(())?;
                 let path_items = components.path_items.as_ref().ok_or(())?;
-                let path_item = path_items.get(&r.name).ok_or(())?;
+                let path_item = path_items.get(&r.as_components_key()).ok_or(())?;
 
                 self.get_path_item_ref(path_item) // recursion
             }
         }
+    }
+}
+
+pub trait IdentPart: fmt::Display {
+    fn type_token(&self) -> String;
+    fn fn_token(&self) -> String;
+}
+
+#[derive(Eq, PartialEq, Debug)]
+pub struct PathItemKey {
+    path: String,
+}
+
+impl PathItemKey {
+    pub fn path(&self) -> &String {
+        &self.path
+    }
+}
+
+impl IdentPart for PathItemKey {
+    fn type_token(&self) -> String {
+        upper_camel_case(&self.path)
+    }
+
+    fn fn_token(&self) -> String {
+        snake_case(&self.path)
+    }
+}
+
+impl std::fmt::Display for PathItemKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.path.fmt(f)
+    }
+}
+
+impl std::hash::Hash for PathItemKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.path.hash(state)
+    }
+}
+
+impl<'de> Deserialize<'de> for PathItemKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let path_or_name = String::deserialize(deserializer)?;
+
+        Ok(PathItemKey { path: path_or_name })
+    }
+}
+
+#[derive(Eq, PartialEq, Debug)]
+pub struct ComponentsPathItemKey {
+    name: String,
+}
+
+impl IdentPart for ComponentsPathItemKey {
+    fn type_token(&self) -> String {
+        upper_camel_case(&self.name)
+    }
+
+    fn fn_token(&self) -> String {
+        snake_case(&self.name)
+    }
+}
+
+impl std::fmt::Display for ComponentsPathItemKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.fmt(f)
+    }
+}
+
+impl std::hash::Hash for ComponentsPathItemKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state)
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentsPathItemKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+
+        Ok(ComponentsPathItemKey { name })
     }
 }
 
@@ -126,6 +211,14 @@ impl<'a> Iterator for PathItemObjectMethodIter<'a> {
 #[derive(Debug)]
 pub struct PathItemObjectRef {
     name: String,
+}
+
+impl PathItemObjectRef {
+    fn as_components_key(&self) -> ComponentsPathItemKey {
+        ComponentsPathItemKey {
+            name: self.name.clone(),
+        }
+    }
 }
 
 // TODO(daaitch): duplicated code, see SchemaObjectRef
@@ -251,8 +344,7 @@ pub struct OperationObject {
     pub operation_id: Option<String>,
     pub summary: Option<String>,
     pub description: Option<String>,
-    // TODO(daaitch): key should be a StatusCode Object
-    pub responses: HashMap<String, ResponseObject>, // response or ref-object
+    pub responses: HashMap<StatusCode, ResponseObject>, // response or ref-object
     pub parameters: Option<Vec<ParameterObject>>,
     pub request_body: Option<RequestBodyObject>,
 }
@@ -262,10 +354,10 @@ impl OperationObject {
         &self,
         parameters: impl IntoIterator<Item = &'a String>,
         method: &Method,
-        path: impl AsRef<str>,
+        path: &PathItemKey,
     ) -> std::result::Result<(), String> {
         for parameter in parameters {
-            let what = || format!("'{}' in '{} {}'", parameter, method, path.as_ref());
+            let what = || format!("'{}' in '{} {}'", parameter, method, path.path);
 
             let parameters = self
                 .parameters
@@ -291,6 +383,45 @@ impl OperationObject {
         }
 
         Ok(())
+    }
+
+    pub fn get_response_type_id(&self, method: &hyper::Method, path: &dyn IdentPart) -> Ident {
+        let prefix = match &self.operation_id {
+            Some(operation_id) => upper_camel_case(operation_id),
+            None => {
+                let method_ucc = upper_camel_case(method.as_str().to_lowercase());
+
+                format!("{}{}", method_ucc, path.type_token())
+            }
+        };
+
+        format_ident!("{}Response", prefix)
+    }
+
+    pub fn get_response_builder_param_type_id(
+        &self,
+        method: &hyper::Method,
+        path: &dyn IdentPart,
+        status_code: &dyn IdentPart,
+    ) -> syn::Ident {
+        match &self.operation_id {
+            Some(operation_id) => {
+                format_ident!(
+                    "{}{}",
+                    upper_camel_case(operation_id),
+                    status_code.type_token()
+                )
+            }
+            None => {
+                let method_ucc = upper_camel_case(method.as_ref().to_lowercase());
+                format_ident!(
+                    "{}{}{}",
+                    method_ucc,
+                    path.type_token(),
+                    status_code.type_token()
+                )
+            }
+        }
     }
 }
 
@@ -614,5 +745,51 @@ pub struct RequestBodyObject {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentsObject {
     pub schemas: Option<HashMap<String, SchemaObjectOrRef>>,
-    pub path_items: Option<HashMap<String, PathItemObjectOrRef>>,
+    pub path_items: Option<HashMap<ComponentsPathItemKey, PathItemObjectOrRef>>,
+}
+
+#[derive(Eq, PartialEq, Debug)]
+pub struct StatusCode {
+    status: hyper::StatusCode,
+}
+
+impl StatusCode {
+    fn reason(&self) -> String {
+        match self.status.canonical_reason() {
+            Some(reason) => reason.to_owned(),
+            None => format!("Unknown {}", self.status.as_u16()),
+        }
+    }
+}
+
+impl fmt::Display for StatusCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.status.fmt(f)
+    }
+}
+
+impl IdentPart for StatusCode {
+    fn type_token(&self) -> String {
+        upper_camel_case(self.reason())
+    }
+
+    fn fn_token(&self) -> String {
+        snake_case(self.reason())
+    }
+}
+
+impl std::hash::Hash for StatusCode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.status.hash(state)
+    }
+}
+
+impl<'de> Deserialize<'de> for StatusCode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let status = String::deserialize(deserializer)?;
+        let status =
+            hyper::StatusCode::from_bytes(status.as_bytes()).map_err(serde::de::Error::custom)?;
+
+        Ok(StatusCode { status })
+    }
 }

@@ -192,20 +192,19 @@ impl OpenAPITokenStream {
     fn expand_response_source(
         &mut self,
         method: &hyper::Method,
-        path: impl AsRef<str>,
+        path: &dyn oa::IdentPart,
         operation: &oa::OperationObject,
     ) {
         let mut impl_sources: Vec<TokenStream> = Vec::new();
 
-        let struct_id = naming::get_response_type_id(operation, method, &path);
+        let struct_id = operation.get_response_type_id(method, path);
 
         for (status_code, response) in &operation.responses {
-            let type_id =
-                naming::get_response_builder_param_type_id(&operation, method, &path, status_code);
+            let type_id = operation.get_response_builder_param_type_id(method, path, status_code);
             self.expand_schema_source(&type_id, &response.content.application_json.schema);
 
             let fn_name_id = naming::get_status_code_response_fn_name_id(status_code);
-            let fn_doc_source = expand_method_doc(&method, &path, status_code, response);
+            let fn_doc_source = expand_method_doc(&method, path, status_code, response);
 
             impl_sources.push(quote! {
                 #fn_doc_source
@@ -248,7 +247,7 @@ impl OpenAPITokenStream {
     fn expand_request_body_source(
         &mut self,
         method: &hyper::Method,
-        path: impl AsRef<str>,
+        path: &dyn oa::IdentPart,
         operation: &oa::OperationObject,
     ) {
         let request_type_id = naming::get_request_type_id(operation, method, path);
@@ -336,7 +335,7 @@ impl OpenAPITokenStream {
         }
     }
 
-    fn expand_path_item_object(&mut self, object: &oa::PathItemObject, path: &String) {
+    fn expand_path_item_object(&mut self, object: &oa::PathItemObject, path: &dyn oa::IdentPart) {
         for (method, operation) in object.operations() {
             self.expand_response_source(&method, path, operation);
             self.expand_parameters_source(&method, path, operation);
@@ -347,7 +346,7 @@ impl OpenAPITokenStream {
     fn expand_parameters_source(
         &mut self,
         method: &hyper::Method,
-        path: &String,
+        path: &dyn oa::IdentPart,
         operation: &oa::OperationObject,
     ) {
         if let Some(parameters) = &operation.parameters {
@@ -378,7 +377,7 @@ impl OpenAPITokenStream {
 
         for route in routes {
             let node = method_map.entry(route.method.clone()).or_default();
-            node.insert_into(&route.path, route);
+            node.insert_into(route.path.path(), route);
         }
 
         let match_method_arm_sources = method_map.into_iter().map(|(method, node)| {
@@ -546,11 +545,9 @@ fn expand_doc(text: impl AsRef<str>) -> TokenStream {
 
 fn expand_response_doc(
     method: &hyper::Method,
-    path: impl AsRef<str>,
+    path: &dyn oa::IdentPart,
     spec: &oa::OperationObject,
 ) -> TokenStream {
-    let path = path.as_ref();
-
     let doc = match &spec.description {
         Some(desc) => format!("`{} {}`\n\n{}", method.as_str(), path, desc),
         None => format!("`{} {}`", method.as_str(), path),
@@ -561,13 +558,10 @@ fn expand_response_doc(
 
 fn expand_method_doc(
     method: &hyper::Method,
-    path: impl AsRef<str>,
-    status_code: impl AsRef<str>,
+    path: &dyn oa::IdentPart,
+    status_code: &dyn oa::IdentPart,
     spec: &oa::ResponseObject,
 ) -> TokenStream {
-    let path = path.as_ref();
-    let status_code = status_code.as_ref();
-
     expand_doc(format!(
         "`{} {} -> {}`\n\n{}",
         method.as_str(),
@@ -579,21 +573,21 @@ fn expand_method_doc(
 
 struct Route<'a> {
     method: hyper::Method,
-    path: &'a String,
+    path: &'a oa::PathItemKey,
     operation: &'a oa::OperationObject,
 }
 
 impl<'a> Route<'a> {
     fn get_operation_id(&self) -> syn::Ident {
-        naming::get_operation_id(self.operation, &self.method, &self.path)
+        naming::get_operation_id(self.operation, &self.method, self.path)
     }
 
     fn get_request_type_id(&self) -> syn::Ident {
-        naming::get_request_type_id(self.operation, &self.method, &self.path)
+        naming::get_request_type_id(self.operation, &self.method, self.path)
     }
 
     fn get_response_type_id(&self) -> syn::Ident {
-        naming::get_response_type_id(self.operation, &self.method, &self.path)
+        self.operation.get_response_type_id(&self.method, self.path)
     }
 
     fn get_request_parameters_type_id(&self) -> syn::Ident {

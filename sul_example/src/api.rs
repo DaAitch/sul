@@ -20,7 +20,7 @@ impl ApiController {
         ApiController { context }
     }
 
-    pub async fn get_users_id_(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
+    pub async fn get_users_id(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
         GetUsersIdResponse::ok(&format!("parameter is {}", request.parameters.id))
     }
 

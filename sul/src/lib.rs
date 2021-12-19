@@ -7,6 +7,7 @@ use tokenstream::expand_openapi_tokenstream;
 mod naming;
 mod openapi;
 mod tokenstream;
+mod util;
 
 // return quote_spanned! {
 //     yaml_filename.span() => compile_error!("error here");

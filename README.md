@@ -48,7 +48,7 @@ impl ApiController {
         ApiController { context }
     }
 
-    pub async fn get_users_id_(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
+    pub async fn get_users_id(self, request: GetUsersIdRequest) -> GetUsersIdResponse {
         GetUsersIdResponse::ok(&format!("parameter is {}", request.id))
     }
 }
@@ -82,9 +82,7 @@ There are a lot of missing features which are easy to implement, but the current
   - [x] PATCH
   - [x] TRACE
 - Responses
-  - [x] 200: Ok
-  - [x] 401: Unauthorized
-  - [ ] other status codes
+  - [x] all status codes (according to RFC 7230)
 - Content types
   - [x] JSON
   - [ ] other formats
