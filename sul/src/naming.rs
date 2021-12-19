@@ -6,7 +6,7 @@ use quote::format_ident;
 pub fn get_operation_id_ucc(
     operation: &oa::OperationObject,
     method: impl AsRef<str>,
-    path: &dyn oa::IdentPart,
+    path: &dyn oa::PathItemType,
 ) -> syn::Ident {
     match &operation.operation_id {
         Some(operation_id) => id(upper_camel_case(operation_id)),
@@ -21,7 +21,7 @@ pub fn get_operation_id_ucc(
 pub fn get_request_type_id(
     operation: &oa::OperationObject,
     method: impl AsRef<str>,
-    path: &dyn oa::IdentPart,
+    path: &dyn oa::PathItemType,
 ) -> syn::Ident {
     let prefix = match &operation.operation_id {
         Some(operation_id) => upper_camel_case(operation_id),
@@ -41,7 +41,7 @@ pub fn get_parameter_id(parameter_name: impl AsRef<str>) -> syn::Ident {
 pub fn get_parameter_type_id(
     operation: &oa::OperationObject,
     method: impl AsRef<str>,
-    path: &dyn oa::IdentPart,
+    path: &dyn oa::PathItemType,
 ) -> syn::Ident {
     let operation_id_ucc = get_operation_id_ucc(operation, method, path);
     format_ident!("{}Parameter", operation_id_ucc)
@@ -50,7 +50,7 @@ pub fn get_parameter_type_id(
 pub fn get_operation_id(
     operation: &oa::OperationObject,
     method: impl AsRef<str>,
-    path: &dyn oa::IdentPart,
+    path: &dyn oa::PathItemType,
 ) -> syn::Ident {
     match &operation.operation_id {
         Some(operation_id) => id(snake_case(operation_id)),
@@ -91,10 +91,6 @@ pub fn get_schema_object_ref_type_id(r: &oa::SchemaObjectRef) -> syn::Ident {
 
 pub fn get_components_name_id(name: impl AsRef<str>) -> syn::Ident {
     format_ident!("{}", upper_camel_case(name.as_ref()))
-}
-
-pub fn get_status_code_response_fn_name_id(status_code: &dyn oa::IdentPart) -> Ident {
-    format_ident!("{}", status_code.fn_token())
 }
 
 pub fn get_method_enum_value(method: &hyper::Method) -> Ident {

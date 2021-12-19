@@ -1,13 +1,13 @@
 //! <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md>
 
 use hyper::Method;
-use proc_macro2::Ident;
 use quote::format_ident;
 use serde::{
     de::{MapAccess, Visitor},
     Deserialize, Deserializer,
 };
 use std::{collections::HashMap, fmt, path::Path};
+use syn::Ident;
 
 use crate::util::{snake_case, upper_camel_case};
 
@@ -52,9 +52,9 @@ impl Document {
     }
 }
 
-pub trait IdentPart: fmt::Display {
-    fn type_token(&self) -> String;
-    fn fn_token(&self) -> String;
+pub trait PathItemType: fmt::Display + fmt::Debug {
+    fn type_token(&self) -> Ident;
+    fn fn_token(&self) -> Ident;
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -68,13 +68,13 @@ impl PathItemKey {
     }
 }
 
-impl IdentPart for PathItemKey {
-    fn type_token(&self) -> String {
-        upper_camel_case(&self.path)
+impl PathItemType for PathItemKey {
+    fn type_token(&self) -> Ident {
+        format_ident!("{}", upper_camel_case(&self.path))
     }
 
-    fn fn_token(&self) -> String {
-        snake_case(&self.path)
+    fn fn_token(&self) -> Ident {
+        format_ident!("{}", snake_case(&self.path))
     }
 }
 
@@ -103,13 +103,13 @@ pub struct ComponentsPathItemKey {
     name: String,
 }
 
-impl IdentPart for ComponentsPathItemKey {
-    fn type_token(&self) -> String {
-        upper_camel_case(&self.name)
+impl PathItemType for ComponentsPathItemKey {
+    fn type_token(&self) -> Ident {
+        format_ident!("{}", upper_camel_case(&self.name))
     }
 
-    fn fn_token(&self) -> String {
-        snake_case(&self.name)
+    fn fn_token(&self) -> Ident {
+        format_ident!("{}", snake_case(&self.name))
     }
 }
 
@@ -385,7 +385,7 @@ impl OperationObject {
         Ok(())
     }
 
-    pub fn get_response_type_id(&self, method: &hyper::Method, path: &dyn IdentPart) -> Ident {
+    pub fn response_type_id(&self, method: &hyper::Method, path: &dyn PathItemType) -> Ident {
         let prefix = match &self.operation_id {
             Some(operation_id) => upper_camel_case(operation_id),
             None => {
@@ -398,18 +398,19 @@ impl OperationObject {
         format_ident!("{}Response", prefix)
     }
 
-    pub fn get_response_builder_param_type_id(
+    /// e.g. `GetUserOk` for `GetUserResponse::ok(GetUserOk {..})`
+    pub fn response_data_type_id(
         &self,
         method: &hyper::Method,
-        path: &dyn IdentPart,
-        status_code: &dyn IdentPart,
+        path: &dyn PathItemType,
+        status_code: &StatusCode,
     ) -> syn::Ident {
         match &self.operation_id {
             Some(operation_id) => {
                 format_ident!(
                     "{}{}",
                     upper_camel_case(operation_id),
-                    status_code.type_token()
+                    status_code.response_data_type_token_id()
                 )
             }
             None => {
@@ -418,7 +419,7 @@ impl OperationObject {
                     "{}{}{}",
                     method_ucc,
                     path.type_token(),
-                    status_code.type_token()
+                    status_code.response_data_type_token_id()
                 )
             }
         }
@@ -772,13 +773,15 @@ impl fmt::Display for StatusCode {
     }
 }
 
-impl IdentPart for StatusCode {
-    fn type_token(&self) -> String {
-        upper_camel_case(self.reason())
+impl StatusCode {
+    /// e.g. `Ok` in `GetUserOk` for `GetUserResponse::ok(GetUserOk {..})`
+    pub fn response_data_type_token_id(&self) -> Ident {
+        format_ident!("{}", upper_camel_case(self.reason()))
     }
 
-    fn fn_token(&self) -> String {
-        snake_case(self.reason())
+    /// e.g. `ok` in `GetUserResponse::ok(..)`
+    pub fn response_fn_name_id(&self) -> Ident {
+        format_ident!("{}", snake_case(self.reason()))
     }
 }
 

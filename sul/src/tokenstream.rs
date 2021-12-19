@@ -192,24 +192,27 @@ impl OpenAPITokenStream {
     fn expand_response_source(
         &mut self,
         method: &hyper::Method,
-        path: &dyn oa::IdentPart,
+        path: &dyn oa::PathItemType,
         operation: &oa::OperationObject,
     ) {
         let mut impl_sources: Vec<TokenStream> = Vec::new();
 
-        let struct_id = operation.get_response_type_id(method, path);
+        let struct_id = operation.response_type_id(method, path);
 
         for (status_code, response) in &operation.responses {
-            let type_id = operation.get_response_builder_param_type_id(method, path, status_code);
-            self.expand_schema_source(&type_id, &response.content.application_json.schema);
+            let response_data_type_id = operation.response_data_type_id(method, path, status_code);
+            self.expand_schema_source(
+                &response_data_type_id,
+                &response.content.application_json.schema,
+            );
 
-            let fn_name_id = naming::get_status_code_response_fn_name_id(status_code);
+            let fn_name_id = status_code.response_fn_name_id();
             let fn_doc_source = expand_method_doc(&method, path, status_code, response);
             let code = status_code.code();
 
             impl_sources.push(quote! {
                 #fn_doc_source
-                pub async fn #fn_name_id(data: #type_id) -> #struct_id {
+                pub async fn #fn_name_id(data: #response_data_type_id) -> #struct_id {
                     let result = tokio::task::spawn_blocking(move || {
                         let data = data;
                         serde_json::to_string(&data).unwrap()
@@ -263,7 +266,7 @@ impl OpenAPITokenStream {
     fn expand_request_body_source(
         &mut self,
         method: &hyper::Method,
-        path: &dyn oa::IdentPart,
+        path: &dyn oa::PathItemType,
         operation: &oa::OperationObject,
     ) {
         let request_type_id = naming::get_request_type_id(operation, method, path);
@@ -350,7 +353,11 @@ impl OpenAPITokenStream {
         }
     }
 
-    fn expand_path_item_object(&mut self, object: &oa::PathItemObject, path: &dyn oa::IdentPart) {
+    fn expand_path_item_object(
+        &mut self,
+        object: &oa::PathItemObject,
+        path: &dyn oa::PathItemType,
+    ) {
         for (method, operation) in object.operations() {
             self.expand_response_source(&method, path, operation);
             self.expand_parameters_source(&method, path, operation);
@@ -361,7 +368,7 @@ impl OpenAPITokenStream {
     fn expand_parameters_source(
         &mut self,
         method: &hyper::Method,
-        path: &dyn oa::IdentPart,
+        path: &dyn oa::PathItemType,
         operation: &oa::OperationObject,
     ) {
         if let Some(parameters) = &operation.parameters {
@@ -581,7 +588,7 @@ fn expand_doc(text: impl AsRef<str>) -> TokenStream {
 
 fn expand_response_doc(
     method: &hyper::Method,
-    path: &dyn oa::IdentPart,
+    path: &dyn oa::PathItemType,
     spec: &oa::OperationObject,
 ) -> TokenStream {
     let doc = match &spec.description {
@@ -594,8 +601,8 @@ fn expand_response_doc(
 
 fn expand_method_doc(
     method: &hyper::Method,
-    path: &dyn oa::IdentPart,
-    status_code: &dyn oa::IdentPart,
+    path: &dyn oa::PathItemType,
+    status_code: &oa::StatusCode,
     spec: &oa::ResponseObject,
 ) -> TokenStream {
     expand_doc(format!(
@@ -623,7 +630,7 @@ impl<'a> Route<'a> {
     }
 
     fn get_response_type_id(&self) -> syn::Ident {
-        self.operation.get_response_type_id(&self.method, self.path)
+        self.operation.response_type_id(&self.method, self.path)
     }
 
     fn get_request_parameters_type_id(&self) -> syn::Ident {
