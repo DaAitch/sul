@@ -1,6 +1,5 @@
 //! <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md>
 
-use hyper::Method;
 use quote::format_ident;
 use serde::{
     de::{MapAccess, Visitor},
@@ -148,62 +147,92 @@ pub struct ServerObject {
     pub description: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct Method {
+    inner: hyper::Method,
+}
+
+impl Method {
+    pub fn ucc_token_id(&self) -> Ident {
+        format_ident!("{}", upper_camel_case(&self.inner))
+    }
+
+    pub fn sc_token_id(&self) -> Ident {
+        format_ident!("{}", snake_case(&self.inner))
+    }
+
+    pub fn uc_id(&self) -> Ident {
+        format_ident!("{}", self.inner.as_str())
+    }
+}
+
+impl fmt::Display for Method {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
 /// <https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#path-item-object>
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub struct PathItemObject {
-    pub get: Option<OperationObject>,
-    pub put: Option<OperationObject>,
-    pub post: Option<OperationObject>,
-    pub delete: Option<OperationObject>,
-    pub options: Option<OperationObject>,
-    pub head: Option<OperationObject>,
-    pub patch: Option<OperationObject>,
-    pub trace: Option<OperationObject>,
+    pub operations: HashMap<Method, OperationObject>,
+    // pub put: Option<OperationObject>,
+    // pub post: Option<OperationObject>,
+    // pub delete: Option<OperationObject>,
+    // pub options: Option<OperationObject>,
+    // pub head: Option<OperationObject>,
+    // pub patch: Option<OperationObject>,
+    // pub trace: Option<OperationObject>,
 }
 
-impl PathItemObject {
-    pub fn operations<'a>(&'a self) -> PathItemObjectMethodIter<'a> {
-        PathItemObjectMethodIter::new(self)
-    }
-}
-
-pub struct PathItemObjectMethodIter<'a> {
-    object: &'a PathItemObject,
-    next_item: u8,
-}
-
-impl<'a> PathItemObjectMethodIter<'a> {
-    fn new(object: &'a PathItemObject) -> Self {
-        Self {
-            object,
-            next_item: 0,
+impl<'de> Deserialize<'de> for PathItemObject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize, Debug)]
+        #[serde(rename_all = "camelCase")]
+        enum InnerMethod {
+            Get,
+            Put,
+            Post,
+            Delete,
+            Options,
+            Head,
+            Patch,
+            Trace,
         }
-    }
-}
 
-impl<'a> Iterator for PathItemObjectMethodIter<'a> {
-    type Item = (Method, &'a OperationObject);
+        struct V;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let item = match self.next_item {
-                0 => self.object.get.as_ref().map(|op| (Method::GET, op)),
-                1 => self.object.put.as_ref().map(|op| (Method::PUT, op)),
-                2 => self.object.post.as_ref().map(|op| (Method::POST, op)),
-                3 => self.object.delete.as_ref().map(|op| (Method::DELETE, op)),
-                4 => self.object.options.as_ref().map(|op| (Method::OPTIONS, op)),
-                5 => self.object.head.as_ref().map(|op| (Method::HEAD, op)),
-                6 => self.object.patch.as_ref().map(|op| (Method::PATCH, op)),
-                7 => self.object.trace.as_ref().map(|op| (Method::TRACE, op)),
-                _ => return None,
-            };
+        impl<'de> Visitor<'de> for V {
+            type Value = PathItemObject;
 
-            self.next_item += 1;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "valid Operation Object with optional keys: get, put, post, delete, options, head, patch, trace")
+            }
 
-            if let Some(item) = item {
-                return Some(item);
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut operations = HashMap::new();
+
+                while let Some(key) = map.next_key::<InnerMethod>()? {
+                    let operation = map.next_value::<OperationObject>()?;
+                    let inner = match key {
+                        InnerMethod::Get => hyper::Method::GET,
+                        InnerMethod::Put => hyper::Method::PUT,
+                        InnerMethod::Post => hyper::Method::POST,
+                        InnerMethod::Delete => hyper::Method::DELETE,
+                        InnerMethod::Options => hyper::Method::OPTIONS,
+                        InnerMethod::Head => hyper::Method::HEAD,
+                        InnerMethod::Patch => hyper::Method::PATCH,
+                        InnerMethod::Trace => hyper::Method::TRACE,
+                    };
+
+                    operations.insert(Method { inner }, operation);
+                }
+
+                Ok(PathItemObject { operations })
             }
         }
+
+        deserializer.deserialize_map(V)
     }
 }
 
@@ -294,23 +323,46 @@ impl<'de> Deserialize<'de> for PathItemObjectOrRef {
                     Trace,
                 }
 
+                impl Into<Option<Method>> for Key {
+                    fn into(self) -> Option<Method> {
+                        let inner = match self {
+                            Key::Get => hyper::Method::GET,
+                            Key::Put => hyper::Method::PUT,
+                            Key::Post => hyper::Method::POST,
+                            Key::Delete => hyper::Method::DELETE,
+                            Key::Options => hyper::Method::OPTIONS,
+                            Key::Head => hyper::Method::HEAD,
+                            Key::Patch => hyper::Method::PATCH,
+                            Key::Trace => hyper::Method::TRACE,
+                            Key::Ref => return None,
+                        };
+
+                        Some(Method { inner })
+                    }
+                }
+
                 let mut r#ref: Option<PathItemObjectRef> = None;
-                let mut methods: HashMap<Key, OperationObject> = Default::default();
+                let mut operations = HashMap::new();
 
                 while let Some(key) = map.next_key::<Key>()? {
                     match key {
                         Key::Ref => {
                             r#ref = Some(map.next_value()?);
                         }
-                        method => {
-                            methods.insert(method, map.next_value()?);
+                        key => {
+                            let method: Option<Method> = key.into();
+
+                            // this is okay, because "$ref" is filtered out in previous arm
+                            let method = method.unwrap();
+
+                            operations.insert(method, map.next_value()?);
                         }
                     }
                 }
 
                 match r#ref {
                     Some(r#ref) => {
-                        if !methods.is_empty() {
+                        if !operations.is_empty() {
                             return Err(serde::de::Error::invalid_value(
                                 serde::de::Unexpected::StructVariant,
                                 &self,
@@ -319,16 +371,7 @@ impl<'de> Deserialize<'de> for PathItemObjectOrRef {
 
                         Ok(PathItemObjectOrRef::Ref(r#ref))
                     }
-                    None => Ok(PathItemObjectOrRef::Object(PathItemObject {
-                        get: methods.remove(&Key::Get),
-                        put: methods.remove(&Key::Put),
-                        post: methods.remove(&Key::Post),
-                        delete: methods.remove(&Key::Delete),
-                        options: methods.remove(&Key::Options),
-                        head: methods.remove(&Key::Head),
-                        patch: methods.remove(&Key::Patch),
-                        trace: methods.remove(&Key::Trace),
-                    })),
+                    None => Ok(PathItemObjectOrRef::Object(PathItemObject { operations })),
                 }
             }
         }
@@ -385,13 +428,12 @@ impl OperationObject {
         Ok(())
     }
 
-    pub fn response_type_id(&self, method: &hyper::Method, path: &dyn PathItemType) -> Ident {
+    // e.g. `GetUserResponse`
+    pub fn response_type_id(&self, method: &Method, path: &dyn PathItemType) -> Ident {
         let prefix = match &self.operation_id {
             Some(operation_id) => upper_camel_case(operation_id),
             None => {
-                let method_ucc = upper_camel_case(method.as_str().to_lowercase());
-
-                format!("{}{}", method_ucc, path.type_token())
+                format!("{}{}", method.ucc_token_id(), path.type_token())
             }
         };
 
@@ -401,7 +443,7 @@ impl OperationObject {
     /// e.g. `GetUserOk` for `GetUserResponse::ok(GetUserOk {..})`
     pub fn response_data_type_id(
         &self,
-        method: &hyper::Method,
+        method: &Method,
         path: &dyn PathItemType,
         status_code: &StatusCode,
     ) -> syn::Ident {
@@ -414,10 +456,9 @@ impl OperationObject {
                 )
             }
             None => {
-                let method_ucc = upper_camel_case(method.as_ref().to_lowercase());
                 format_ident!(
                     "{}{}{}",
-                    method_ucc,
+                    method.ucc_token_id(),
                     path.type_token(),
                     status_code.response_data_type_token_id()
                 )

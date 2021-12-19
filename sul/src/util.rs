@@ -110,5 +110,6 @@ mod tests {
         );
 
         assert_eq!(upper_camel_case("getUser"), "GetUser".to_owned());
+        assert_eq!(upper_camel_case("GET"), "Get".to_owned());
     }
 }

@@ -72,7 +72,7 @@ impl OpenAPITokenStream {
                     .get_path_item_ref(item)
                     .expect("cannot find path item $ref");
 
-                for (method, operation) in item.operations() {
+                for (method, operation) in &item.operations {
                     routes.push(Route {
                         method,
                         path,
@@ -189,7 +189,7 @@ impl OpenAPITokenStream {
     /// Expands at the http method, e.g. `paths./users.get` for the name "GetUsers"
     fn expand_response_source(
         &mut self,
-        method: &hyper::Method,
+        method: &oa::Method,
         path: &dyn oa::PathItemType,
         operation: &oa::OperationObject,
     ) {
@@ -205,7 +205,7 @@ impl OpenAPITokenStream {
             );
 
             let fn_name_id = status_code.response_fn_name_id();
-            let fn_doc_source = expand_method_doc(&method, path, status_code, response);
+            let fn_doc_source = expand_method_doc(method, path, status_code, response);
             let code = status_code.code();
 
             impl_sources.push(quote! {
@@ -263,7 +263,7 @@ impl OpenAPITokenStream {
     /// Expands at the http method, e.g. `paths./users.get` for the name "GetUsersRequestBody"
     fn expand_request_body_source(
         &mut self,
-        method: &hyper::Method,
+        method: &oa::Method,
         path: &dyn oa::PathItemType,
         operation: &oa::OperationObject,
     ) {
@@ -356,16 +356,16 @@ impl OpenAPITokenStream {
         object: &oa::PathItemObject,
         path: &dyn oa::PathItemType,
     ) {
-        for (method, operation) in object.operations() {
-            self.expand_response_source(&method, path, operation);
-            self.expand_parameters_source(&method, path, operation);
-            self.expand_request_body_source(&method, path, operation);
+        for (method, operation) in &object.operations {
+            self.expand_response_source(method, path, operation);
+            self.expand_parameters_source(method, path, operation);
+            self.expand_request_body_source(method, path, operation);
         }
     }
 
     fn expand_parameters_source(
         &mut self,
-        method: &hyper::Method,
+        method: &oa::Method,
         path: &dyn oa::PathItemType,
         operation: &oa::OperationObject,
     ) {
@@ -393,7 +393,7 @@ impl OpenAPITokenStream {
         &mut self,
         routes: impl IntoIterator<Item = &'a Route<'a>>,
     ) -> TokenStream {
-        let mut method_map: HashMap<hyper::Method, PathNode> = Default::default();
+        let mut method_map: HashMap<oa::Method, PathNode> = HashMap::new();
 
         for route in routes {
             let node = method_map.entry(route.method.clone()).or_default();
@@ -403,7 +403,7 @@ impl OpenAPITokenStream {
         let match_method_arm_sources = method_map.into_iter().map(|(method, node)| {
             let method_match_arm_source = self.expand_node_matcher(&node, &Vec::new());
 
-            let id = naming::get_method_enum_value(&method);
+            let id = method.uc_id();
             quote! {
                 hyper::Method:: #id => {
                     #method_match_arm_source
@@ -584,35 +584,32 @@ fn expand_doc(text: impl AsRef<str>) -> TokenStream {
 }
 
 fn expand_response_doc(
-    method: &hyper::Method,
+    method: &oa::Method,
     path: &dyn oa::PathItemType,
     spec: &oa::OperationObject,
 ) -> TokenStream {
     let doc = match &spec.description {
-        Some(desc) => format!("`{} {}`\n\n{}", method.as_str(), path, desc),
-        None => format!("`{} {}`", method.as_str(), path),
+        Some(desc) => format!("`{} {}`\n\n{}", method, path, desc),
+        None => format!("`{} {}`", method, path),
     };
 
     expand_doc(doc)
 }
 
 fn expand_method_doc(
-    method: &hyper::Method,
+    method: &oa::Method,
     path: &dyn oa::PathItemType,
     status_code: &oa::StatusCode,
     spec: &oa::ResponseObject,
 ) -> TokenStream {
     expand_doc(format!(
         "`{} {} -> {}`\n\n{}",
-        method.as_str(),
-        path,
-        status_code,
-        &spec.description
+        method, path, status_code, &spec.description
     ))
 }
 
 struct Route<'a> {
-    method: hyper::Method,
+    method: &'a oa::Method,
     path: &'a oa::PathItemKey,
     operation: &'a oa::OperationObject,
 }
